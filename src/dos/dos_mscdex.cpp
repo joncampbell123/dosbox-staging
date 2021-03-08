@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "compiler.h"
 #include "regs.h"
 #include "callback.h"
 #include "dos_system.h"
@@ -63,19 +64,54 @@ static MountType MSCDEX_GetMountType(const char *path);
 class DOS_DeviceHeader : public MemStruct {
 public:
 	DOS_DeviceHeader(PhysPt ptr) { pt = ptr; }
-	
-	void	SetNextDeviceHeader	(RealPt ptr)	{ sSave(sDeviceHeader,nextDeviceHeader,ptr);	};
-	RealPt	GetNextDeviceHeader	(void)			{ return sGet(sDeviceHeader,nextDeviceHeader);	};
-	void	SetAttribute		(Bit16u atr)	{ sSave(sDeviceHeader,devAttributes,atr);		};
-	void	SetDriveLetter		(Bit8u letter)	{ sSave(sDeviceHeader,driveLetter,letter);		};
-	void	SetNumSubUnits		(Bit8u num)		{ sSave(sDeviceHeader,numSubUnits,num);			};
-	Bit8u	GetNumSubUnits		(void)			{ return sGet(sDeviceHeader,numSubUnits);		};
-	void	SetName				(char const* _name)	{ MEM_BlockWrite(pt+offsetof(sDeviceHeader,name),_name,8); };
-	void	SetInterrupt		(Bit16u ofs)	{ sSave(sDeviceHeader,interrupt,ofs);			};
-	void	SetStrategy			(Bit16u ofs)	{ sSave(sDeviceHeader,strategy,ofs);			};
+
+	void SetNextDeviceHeader(RealPt ptr)
+	{
+		SSET_DWORD(sDeviceHeader, nextDeviceHeader, ptr);
+	}
+
+	RealPt GetNextDeviceHeader() const
+	{
+		return SGET_DWORD(sDeviceHeader, nextDeviceHeader);
+	}
+
+	void SetAttribute(uint16_t atr)
+	{
+		SSET_WORD(sDeviceHeader, devAttributes, atr);
+	}
+
+	void SetDriveLetter(uint8_t letter)
+	{
+		SSET_BYTE(sDeviceHeader, driveLetter, letter);
+	}
+
+	void SetNumSubUnits(uint8_t num)
+	{
+		SSET_BYTE(sDeviceHeader, numSubUnits, num);
+	}
+
+	uint8_t GetNumSubUnits() const
+	{
+		return SGET_BYTE(sDeviceHeader, numSubUnits);
+	}
+
+	void SetName(const char *new_name)
+	{
+		MEM_BlockWrite(pt + offsetof(sDeviceHeader, name), new_name, 8);
+	}
+
+	void SetInterrupt(uint16_t ofs)
+	{
+		SSET_WORD(sDeviceHeader, interrupt, ofs);
+	}
+
+	void SetStrategy(uint16_t offset)
+	{
+		SSET_WORD(sDeviceHeader, strategy, offset);
+	}
 
 public:
-	#ifdef _MSC_VER
+#ifdef _MSC_VER
 	#pragma pack(1)
 	#endif
 	struct sDeviceHeader {
@@ -101,9 +137,14 @@ public:
 	CMscdex            (const CMscdex&) = delete; // prevent copying
 	CMscdex& operator= (const CMscdex&) = delete; // prevent assignment
 
-	Bit16u		GetVersion			(void)	{ return (MSCDEX_VERSION_HIGH<<8)+MSCDEX_VERSION_LOW; };
-	Bit16u   GetNumDrives (void) const { return numDrives; }
-	Bit16u		GetFirstDrive		(void)	{ return dinfo[0].drive; };
+	uint16_t GetVersion() const
+	{
+		return (MSCDEX_VERSION_HIGH << 8) + MSCDEX_VERSION_LOW;
+	}
+
+	uint16_t GetNumDrives() const { return numDrives; }
+	uint16_t GetFirstDrive() const { return dinfo[0].drive; }
+
 	Bit8u		GetSubUnit			(Bit16u _drive);
 	bool		GetUPC				(Bit8u subUnit, Bit8u& attr, char* upc);
 
@@ -268,7 +309,7 @@ int CMscdex::AddDrive(Bit16u _drive, char* physicalPath, Bit8u& subUnit)
 		break;
 	case MountType::DIRECTORY:
 		LOG(LOG_MISC,LOG_NORMAL)("MSCDEX: Mounting directory as cdrom: %s", physicalPath);
-		LOG(LOG_MISC,LOG_NORMAL)("MSCDEX: You wont have full MSCDEX support!");
+		LOG(LOG_MISC, LOG_NORMAL)("MSCDEX: You won't have full MSCDEX support!");
 		cdrom[numDrives] = new CDROM_Interface_Fake;
 		result = 5;
 		break;
@@ -909,8 +950,8 @@ static Bit16u MSCDEX_IOCTL_Input(PhysPt buffer,Bit8u drive_unit) {
 					mem_writed(buffer+1,mscdex->GetDeviceStatus(drive_unit)); 
 					break;
 		case 0x07 : /* Get sector size */
-					if (mem_readb(buffer+1)==0) mem_writed(buffer+2,2048);
-					else if (mem_readb(buffer+1)==1) mem_writed(buffer+2,2352);
+					if (mem_readb(buffer+1)==0) mem_writew(buffer+2,2048);
+					else if (mem_readb(buffer+1)==1) mem_writew(buffer+2,2352);
 					else return 0x03;		// invalid function
 					break;
 		case 0x08 : /* Get size of current volume */
@@ -1138,75 +1179,70 @@ static bool MSCDEX_Handler(void) {
 
 	PhysPt data = PhysMake(SegValue(es),reg_bx);
 	MSCDEX_LOG("MSCDEX: INT 2F %04X BX= %04X CX=%04X",reg_ax,reg_bx,reg_cx);
+	CALLBACK_SCF(false); // carry flag cleared for all functions (undocumented); only set on error
 	switch (reg_ax) {
-	
 		case 0x1500:	/* Install check */
 						reg_bx = mscdex->GetNumDrives();
 						if (reg_bx>0) reg_cx = mscdex->GetFirstDrive();
 						reg_al = 0xff;
-						return true;
+						break;
 		case 0x1501:	/* Get cdrom driver info */
 						mscdex->GetDriverInfo(data);
-						return true;
+						break;
 		case 0x1502:	/* Get Copyright filename */
 		case 0x1503:	/* Get Abstract filename */
 		case 0x1504:	/* Get Documentation filename */
-						if (mscdex->GetFileName(reg_cx,702+(reg_al-2)*37,data)) {
-							CALLBACK_SCF(false);
-						} else {
+						if (!mscdex->GetFileName(reg_cx,702+(reg_al-2)*37,data)) {
 							reg_ax = MSCDEX_ERROR_UNKNOWN_DRIVE;
-							CALLBACK_SCF(true);							
-						};
-						return true;		
+							CALLBACK_SCF(true);
+						}
+						break;
 		case 0x1505: {	// read vtoc 
 						Bit16u offset = 0, error = 0;
-						if (mscdex->ReadVTOC(reg_cx,reg_dx,data,offset,error)) {
-//							reg_ax = error;	// return code
-							CALLBACK_SCF(false);
-						} else {
-							reg_ax = error;
-							CALLBACK_SCF(true);							
-						};
-					 };
-						return true;
+						bool success = mscdex->ReadVTOC(reg_cx,reg_dx,data,offset,error);
+						reg_ax = error;
+						if (!success) CALLBACK_SCF(true);
+					 }
+						break;
+		case 0x1506:	/* Debugging on */
+		case 0x1507:	/* Debugging off */
+						// not functional in production MSCDEX
+						break;
 		case 0x1508: {	// read sectors 
 						Bit32u sector = (reg_si<<16)+reg_di;
 						if (mscdex->ReadSectors(reg_cx,sector,reg_dx,data)) {
 							reg_ax = 0;
-							CALLBACK_SCF(false);
 						} else {
 							// possibly: MSCDEX_ERROR_DRIVE_NOT_READY if sector is beyond total length
 							reg_ax = MSCDEX_ERROR_UNKNOWN_DRIVE;
 							CALLBACK_SCF(true);
-						};
-						return true;
-					 };
+						}
+					 }
+						break;
 		case 0x1509:	// write sectors - not supported 
 						reg_ax = MSCDEX_ERROR_INVALID_FUNCTION;
 						CALLBACK_SCF(true);
-						return true;
+						break;
+		case 0x150A:	/* Reserved */
+						break;
 		case 0x150B:	/* Valid CDROM drive ? */
 						reg_ax = (mscdex->IsValidDrive(reg_cx) ? 0x5ad8 : 0x0000);
 						reg_bx = 0xADAD;
-						return true;
+						break;
 		case 0x150C:	/* Get MSCDEX Version */
 						reg_bx = mscdex->GetVersion();
-						return true;
+						break;
 		case 0x150D:	/* Get drives */
 						mscdex->GetDrives(data);
-						return true;
+						break;
 		case 0x150E:	/* Get/Set Volume Descriptor Preference */
 						if (mscdex->IsValidDrive(reg_cx)) {
 							if (reg_bx == 0) {
 								// get preference
 								reg_dx = 0x100;	// preference?
-								CALLBACK_SCF(false);
 							} else if (reg_bx == 1) {
 								// set preference
-								if (reg_dh == 1) {
-									// valid
-									CALLBACK_SCF(false);
-								} else {
+								if (reg_dh != 1) {
 									reg_ax = MSCDEX_ERROR_INVALID_FUNCTION;
 									CALLBACK_SCF(true);
 								}
@@ -1218,23 +1254,25 @@ static bool MSCDEX_Handler(void) {
 							reg_ax = MSCDEX_ERROR_UNKNOWN_DRIVE;
 							CALLBACK_SCF(true);
 						}
-						return true;
+						break;
 		case 0x150F: {	// Get directory entry
 						Bit16u error;
 						bool success = mscdex->GetDirectoryEntry(reg_cl,reg_ch&1,data,PhysMake(reg_si,reg_di),error);
 						reg_ax = error;
-						CALLBACK_SCF(!success);
-					 };	return true;
+						if (!success) CALLBACK_SCF(true);
+					 }
+						break;
 		case 0x1510:	/* Device driver request */
-						if (mscdex->SendDriverRequest(reg_cx,data)) {
-							CALLBACK_SCF(false);
-						} else {
+						if (!mscdex->SendDriverRequest(reg_cx,data)) {
 							reg_ax = MSCDEX_ERROR_UNKNOWN_DRIVE;
 							CALLBACK_SCF(true);
 						}
-						return true;
-	};
-	LOG(LOG_MISC,LOG_ERROR)("MSCDEX: Unknown call : %04X",reg_ax);
+						break;
+		default:		LOG(LOG_MISC,LOG_ERROR)("MSCDEX: Unknown call : %04X",reg_ax);
+						reg_ax = MSCDEX_ERROR_INVALID_FUNCTION;
+						CALLBACK_SCF(true);
+						break;
+	}
 	return true;
 }
 
@@ -1271,21 +1309,25 @@ bool device_MSCDEX::WriteToControlChannel(PhysPt bufptr,Bit16u size,Bit16u * ret
 	return false;
 }
 
+// TODO: this functions modifies physicalPath despite several callers passing it
+// a const char*. Figure out if a copy can suffice or if the it really should
+// change it upstream (in which case we should drop const and fix the callers).
 int MSCDEX_AddDrive(char driveLetter, const char* physicalPath, Bit8u& subUnit)
 {
-	int result = mscdex->AddDrive(driveLetter-'A',(char*)physicalPath,subUnit);
+	int result = mscdex->AddDrive(drive_index(driveLetter),
+	                              const_cast<char*>(physicalPath), subUnit);
 	return result;
 }
 
 int MSCDEX_RemoveDrive(char driveLetter)
 {
 	if(!mscdex) return 0;
-	return mscdex->RemoveDrive(driveLetter-'A');
+	return mscdex->RemoveDrive(drive_index(driveLetter));
 }
 
 bool MSCDEX_HasDrive(char driveLetter)
 {
-	return mscdex->HasDrive(driveLetter-'A');
+	return mscdex->HasDrive(drive_index(driveLetter));
 }
 
 void MSCDEX_ReplaceDrive(CDROM_Interface* cdrom, Bit8u subUnit)
@@ -1295,7 +1337,7 @@ void MSCDEX_ReplaceDrive(CDROM_Interface* cdrom, Bit8u subUnit)
 
 Bit8u MSCDEX_GetSubUnit(char driveLetter)
 {
-	return mscdex->GetSubUnit(driveLetter-'A');
+	return mscdex->GetSubUnit(drive_index(driveLetter));
 }
 
 bool MSCDEX_GetVolumeName(Bit8u subUnit, char* name)

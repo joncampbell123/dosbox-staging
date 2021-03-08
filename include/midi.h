@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,41 +24,25 @@
 
 #include "dosbox.h"
 
-#include "programs.h"
+#include "setup.h"
 
-class MidiHandler {
-public:
-	MidiHandler();
-	virtual ~MidiHandler() = default;
-	virtual bool Open(const char * /*conf*/) {
-		LOG_MSG("MIDI: No working MIDI device found/selected.");
-		return true;
-	}
-	virtual void Close(void) {};
-	virtual void PlayMsg(Bit8u * /*msg*/) {};
-	virtual void PlaySysex(Bit8u * /*sysex*/,Bitu /*len*/) {};
-	virtual const char * GetName(void) { return "none"; };
-	virtual void ListAll(Program * base) {};
-	MidiHandler * next;
-};
+class Program;
 
-#define SYSEX_SIZE 8192
-struct DB_Midi {
-	Bitu status;
-	Bitu cmd_len;
-	Bitu cmd_pos;
-	Bit8u cmd_buf[8];
-	Bit8u rt_buf[8];
-	struct {
-		Bit8u buf[SYSEX_SIZE];
-		Bitu used;
-		Bitu delay;
-		Bit32u start;
-	} sysex;
-	bool available;
-	MidiHandler * handler;
-};
+extern uint8_t MIDI_evt_len[256];
 
-extern DB_Midi midi;
+constexpr auto MIDI_SYSEX_SIZE = 8192;
+
+void MIDI_Init(Section *sec);
+bool MIDI_Available();
+void MIDI_ListAll(Program *output_handler);
+void MIDI_RawOutByte(uint8_t data);
+
+#if C_FLUIDSYNTH
+void FLUID_AddConfigSection(Config *conf);
+#endif
+
+#if C_MT32EMU
+void MT32_AddConfigSection(Config *conf);
+#endif
 
 #endif

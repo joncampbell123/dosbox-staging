@@ -1,10 +1,15 @@
-.PHONY: help clean
+.PHONY: help clean favicons
 
 help:
-	@echo "Re-generate icons in platform specific formats."
-	@echo
-	@echo "Available targets:"
-	@echo "  hicolor             - Freedesktop icon directory structure"
+	@echo "Re-generate icons in platform specific formats or install pre-rendered png icons"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make install             # install icons to \$${DESTDIR}/usr/local/share/icons/..."
+	@echo "  make install prefix=/usr # install icons to \$${DESTDIR}/usr/share/icons/..."
+	@echo "  make install datadir=foo # install icons to \$${DESTDIR}foo/icons/..."
+	@echo ""
+	@echo "Other available targets:"
+	@echo "  hicolor             - generate freedesktop.org icon directory structure"
 	@echo "  dosbox-staging.ico  - Windows format"
 	@echo "  dosbox-staging.icns - macOS format"
 	@echo "  icon_<size>.png     - render icon in specific size, e.g. icon_24.png"
@@ -26,6 +31,18 @@ dosbox-staging.ico: \
 		icon_24.png \
 		icon_16.png
 	icotool -c $^ -o $@
+
+##
+# Favicons for a web page. Usage:
+#
+# <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+# <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+# <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+#
+favicons: \
+		favicon-16x16.png \
+		favicon-32x32.png \
+		favicon-96x96.png
 
 ##
 #  Create an icon using macOS .icns format.
@@ -97,6 +114,9 @@ icon_48.png: dosbox-staging.svg
 icon_64.png: dosbox-staging.svg
 	rsvg-convert -h 64 $< > $@
 
+icon_96.png: dosbox-staging.svg
+	rsvg-convert -h 96 $< > $@
+
 icon_128.png: dosbox-staging.svg
 	rsvg-convert -h 128 $< > $@
 
@@ -109,7 +129,26 @@ icon_512.png: dosbox-staging.svg
 icon_1024.png: dosbox-staging.svg
 	rsvg-convert -h 1024 $< > $@
 
+favicon-16x16.png: icon_16.png
+	cp $< $@
+
+favicon-32x32.png: icon_32.png
+	cp $< $@
+
+favicon-96x96.png: icon_96.png
+	cp $< $@
+
+prefix = /usr/local
+datadir = $(prefix)/share
+install:
+	install -p -m 0644 -Dt "$(DESTDIR)$(datadir)/icons/hicolor/16x16/apps" small-png/16x16/dosbox-staging.png
+	install -p -m 0644 -Dt "$(DESTDIR)$(datadir)/icons/hicolor/22x22/apps" small-png/22x22/dosbox-staging.png
+	install -p -m 0644 -Dt "$(DESTDIR)$(datadir)/icons/hicolor/24x24/apps" small-png/24x24/dosbox-staging.png
+	install -p -m 0644 -Dt "$(DESTDIR)$(datadir)/icons/hicolor/32x32/apps" small-png/32x32/dosbox-staging.png
+	install -p -m 0644 -Dt "$(DESTDIR)$(datadir)/icons/hicolor/scalable/apps" dosbox-staging.svg
+
 clean:
 	rm -rf dosbox-staging.iconset
 	rm -rf hicolor
 	rm -f icon_*.png
+	rm -f favicon*

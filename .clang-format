@@ -25,7 +25,9 @@ ColumnLimit: 80
 # C/C++ Language specifics
 #
 Language: Cpp
-Standard: Cpp11 # in clang-format 11.x: c++11
+# in clang-format 9.x "Cpp11" covers formatting for C++11 and C++14
+# in clang-format 10.x: switch to "c++14"
+Standard: Cpp11
 
 # The extra indent or outdent of class access modifiers, e.g. public:
 #
@@ -50,6 +52,11 @@ AlignAfterOpenBracket: Align
 # #define bar(y, z)        (y + z)
 #
 AlignConsecutiveMacros: true
+
+# Don't align backslash character in macros, as it's unexpected during review
+# and does not look right when user changes the tab size character in their editor.
+#
+AlignEscapedNewlines: DontAlign
 
 # Allow short functions defined inside a class to be put on a single line
 #
@@ -97,8 +104,6 @@ AlwaysBreakTemplateDeclarations: Yes
 # shortname = "dddd"
 #             "eeee";
 #
-# TODO Test interaction with C++11 raw string literals
-#
 # AlwaysBreakBeforeMultilineStrings: true
 
 # Attach braces to surrounding context except break before braces on function
@@ -133,6 +138,11 @@ BraceWrapping:
   SplitEmptyFunction: false
   SplitEmptyRecord: false
   SplitEmptyNamespace: true
+
+# Never break string literals; programmer will usually do more meaningful
+# break (if it's really required).
+#
+BreakStringLiterals: false
 
 # When set to false, a function declaration's or function definition's
 # parameters (but not function calls) will either all be on the same line
@@ -230,13 +240,6 @@ SpacesInParentheses: false
 #
 SpacesInSquareBrackets: false
 
-# Insert a space after '{' and before '}' in struct initializers
-#
-# This is native C++11 style, but it looks very weird.
-# TODO Investigate if it has any tangible benefits.
-#
-# Cpp11BracedListStyle: false
-
 # A list of macros that should be interpreted as foreach loops instead of as
 # function calls.
 #
@@ -278,6 +281,6 @@ PenaltyReturnTypeOnItsOwnLine: 200
 # "include" directives, but there are still edge cases, so we still need to
 # rely on developers doing this manually.
 #
-# See https://github.com/dreamer/dosbox-staging/issues/196 for details.
+# See https://github.com/dosbox-staging/dosbox-staging/issues/196 for details.
 #
 SortIncludes: false

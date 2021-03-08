@@ -1,0 +1,22 @@
+extraction:
+  cpp:
+    prepare:
+      packages:
+      - "libasound2-dev"
+      - "libopusfile-dev"
+      - "libpng-dev"
+      - "libsdl2-dev"
+      - "libsdl2-net-dev"
+      - "meson"
+    configure:
+      command:
+      - meson setup -Duse_fluidsynth=false -Duse_mt32emu=false build
+    index:
+      build_command:
+        - ninja -C build
+  python:
+    python_setup:
+      version: 3
+
+queries:
+  - exclude: cpp/short-global-name

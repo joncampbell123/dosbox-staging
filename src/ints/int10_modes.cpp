@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -459,21 +459,33 @@ static void FinishSetMode(bool clearmem) {
 				real_writew( 0xb800,ct*2,0x0000);
 			}
 			break;
+		case M_HERC_TEXT:
+		case M_TANDY_TEXT:
 		case M_TEXT: {
+			// TODO Hercules had 32KiB compared to CGA/MDA 16KiB,
+			// but does it matter in here?
 			Bit16u seg = (CurMode->mode==7)?0xb000:0xb800;
 			for (Bit16u ct=0;ct<16*1024;ct++) real_writew(seg,ct*2,0x0720);
 			break;
 		}
-		case M_EGA:	
+		case M_EGA:
 		case M_VGA:
 		case M_LIN8:
 		case M_LIN4:
 		case M_LIN15:
 		case M_LIN16:
 		case M_LIN32:
+		case M_TANDY2:
+		case M_TANDY4:
+		case M_HERC_GFX:
+		case M_CGA16:
 			/* Hack we just access the memory directly */
 			memset(vga.mem.linear,0,vga.vmemsize);
 			memset(vga.fastmem, 0, vga.vmemsize<<1);
+			break;
+		case M_ERROR:
+			assert(false);
+			break;
 		}
 	}
 	/* Setup the BIOS */
@@ -514,7 +526,9 @@ static bool INT10_SetVideoMode_OTHER(Bit16u mode, bool clearmem)
 {
 	switch (machine) {
 	case MCH_CGA:
-		if (mode>6) return false;
+		if (mode > 6)
+			return false;
+		FALLTHROUGH;
 	case TANDY_ARCH_CASE:
 		if (mode>0xa) return false;
 		if (mode==7) mode=0; // PCJR defaults to 0 on illegal mode 7
@@ -1356,7 +1370,8 @@ att_text16:
 					}
 				}
 				break;
-			} //FALLTHROUGH!!!!
+			}
+			FALLTHROUGH;
 		case M_LIN4: //Added for CAD Software
 dac_text16:
 			for (i=0;i<64;i++) {

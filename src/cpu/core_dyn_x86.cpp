@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -33,14 +33,16 @@
 #include <winbase.h>
 #endif
 
-#if (C_HAVE_MPROTECT)
+#if defined(HAVE_MPROTECT)
 #include <sys/mman.h>
 
 #include <limits.h>
+
 #ifndef PAGESIZE
 #define PAGESIZE 4096
 #endif
-#endif /* C_HAVE_MPROTECT */
+
+#endif // HAVE_MPROTECT
 
 #include "callback.h"
 #include "regs.h"
@@ -133,7 +135,6 @@ enum BlockReturn {
 #define DYNFLG_ACTIVE		0x20	//Register has an active value
 
 class GenReg;
-class CodePageHandler;
 
 struct DynReg {
 	Bitu flags;
@@ -160,11 +161,12 @@ static struct {
 
 #define IllegalOption(msg) E_Exit("DYNX86: illegal option in " msg)
 
-#include "core_dyn_x86/cache.h" 
+#define dyn_return(a,b) gen_return(a)
+#include "dyn_cache.h"
 
 static struct {
 	Bitu callback;
-	Bit32u readdata;
+	Bitu readdata;
 } core_dyn;
 
 #if defined(X86_DYNFPU_DH_ENABLED)
@@ -256,12 +258,13 @@ Bits CPU_Core_Dyn_X86_Run(void) {
 	// helper class to auto-save DH_FPU state on function exit
 	class auto_dh_fpu {
 	public:
-		~auto_dh_fpu(void) {
+		~auto_dh_fpu()
+		{
 #if defined(X86_DYNFPU_DH_ENABLED)
 			if (dyn_dh_fpu.state_used)
 				gen_dh_fpu_save();
 #endif
-		};
+		}
 	};
 	auto_dh_fpu fpu_saver;
 
@@ -341,9 +344,11 @@ run_block:
 	case BR_CallBack:
 		return core_dyn.callback;
 	case BR_SMCBlock:
-//		LOG_MSG("selfmodification of running block at %x:%x",SegValue(cs),reg_eip);
+		// LOG_MSG("selfmodification of running block at %x:%x",
+		//         SegValue(cs), reg_eip);
 		cpu.exception.which=0;
-		// fallthrough, let the normal core handle the block-modifying instruction
+		FALLTHROUGH; // let the normal core handle the block-modifying
+		             // instruction
 	case BR_Opcode:
 		CPU_CycleLeft+=CPU_Cycles;
 		CPU_Cycles=1;
@@ -377,7 +382,7 @@ Bits CPU_Core_Dyn_X86_Trap_Run(void) {
 	cpu.trap_skip = false;
 
 	Bits ret=CPU_Core_Normal_Run();
-	if (!cpu.trap_skip) CPU_HW_Interrupt(1);
+	if (!cpu.trap_skip) CPU_DebugException(DBINT_STEP,reg_eip);
 	CPU_Cycles = oldCycles-1;
 	cpudecoder = &CPU_Core_Dyn_X86_Run;
 

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -300,7 +300,7 @@ Bitu XMS_Handler(void) {
 		break;
 	case XMS_ALLOCATE_ANY_MEMORY:								/* 89 */
 		reg_edx &= 0xffff;
-		// fall through
+		FALLTHROUGH;
 	case XMS_ALLOCATE_EXTENDED_MEMORY:							/* 09 */
 		{
 		Bit16u handle = 0;
@@ -331,7 +331,7 @@ Bitu XMS_Handler(void) {
 		break;
 	case XMS_RESIZE_ANY_EXTENDED_MEMORY_BLOCK:					/* 0x8f */
 		if(reg_ebx > reg_bx) LOG_MSG("64MB memory limit!");
-		//fall through
+		FALLTHROUGH;
 	case XMS_RESIZE_EXTENDED_MEMORY_BLOCK:						/* 0f */
 		SET_RESULT(XMS_ResizeMemory(reg_dx, reg_bx));
 		break;
@@ -417,8 +417,12 @@ Bitu GetEMSType(Section_prop * section);
 class XMS: public Module_base {
 private:
 	CALLBACK_HandlerObject callbackhandler;
+
 public:
-	XMS(Section* configuration):Module_base(configuration){
+	XMS(Section *configuration)
+	        : Module_base(configuration),
+	          callbackhandler{}
+	{
 		Section_prop * section=static_cast<Section_prop *>(configuration);
 		umb_available=false;
 		if (!section->Get_bool("xms")) return;
@@ -435,7 +439,7 @@ public:
 		//	label skip:
 		//	callback XMS_Handler
 		//	retf
-	   
+
 		for (i=0;i<XMS_HANDLES;i++) {
 			xms_handles[i].free=true;
 			xms_handles[i].mem=-1;

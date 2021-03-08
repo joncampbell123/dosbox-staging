@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,24 +16,27 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
-#include "dosbox.h"
-#include "regs.h"
-#include "control.h"
 #include "shell.h"
-#include "callback.h"
-#include "support.h"
 
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <memory>
+
+#include "callback.h"
+#include "control.h"
+#include "dosbox.h"
+#include "fs_utils.h"
+#include "regs.h"
+#include "string_utils.h"
 
 Bitu call_shellstop;
 /* Larger scope so shell_del autoexec can use it to
  * remove things from the environment */
-DOS_Shell * first_shell = 0;
+DOS_Shell *first_shell = nullptr;
 
-static Bitu shellstop_handler(void) {
+static Bitu shellstop_handler()
+{
 	return CBRET_STOP;
 }
 
@@ -89,7 +92,8 @@ void AutoexecObject::InstallBefore(const std::string &in) {
 	this->CreateAutoexec();
 }
 
-void AutoexecObject::CreateAutoexec(void) {
+void AutoexecObject::CreateAutoexec()
+{
 	/* Remove old autoexec.bat if the shell exists */
 	if(first_shell)	VFILE_Remove("AUTOEXEC.BAT");
 
@@ -157,26 +161,29 @@ AutoexecObject::~AutoexecObject(){
 }
 
 DOS_Shell::DOS_Shell()
-	: Program(),
-	  l_history{},
-	  l_completion{},
-	  completion_start(nullptr),
-	  completion_index(0),
-	  input_handle(STDIN),
-	  bf(nullptr),
-	  echo(true),
-	  exit(false),
-	  call(false)
+        : Program(),
+          l_history{},
+          l_completion{},
+          completion_start(nullptr),
+          completion_index(0),
+          input_handle(STDIN),
+          bf(nullptr),
+          echo(true),
+          call(false)
 {}
 
-Bitu DOS_Shell::GetRedirection(char *s, char **ifn, char **ofn,bool * append) {
-
+// TODO: this function should be refactored to make to it easier to understand.
+// It's currently riddled with pointer and array adjustments each loop plus
+// branches and sub-loops.
+Bitu DOS_Shell::GetRedirection(char *s, char **ifn, char **ofn, bool *append)
+{
 	char * lr=s;
 	char * lw=s;
 	char ch;
 	Bitu num=0;
 	bool quote = false;
-	char* t;
+	char *temp = nullptr;
+	size_t temp_len = 0;
 
 	while ( (ch=*lr++) ) {
 		if(quote && ch != '"') { /* don't parse redirection within quotes. Not perfect yet. Escaped quotes will mess the count up */
@@ -192,41 +199,32 @@ Bitu DOS_Shell::GetRedirection(char *s, char **ifn, char **ofn,bool * append) {
 			*append=((*lr)=='>');
 			if (*append) lr++;
 			lr=ltrim(lr);
-			if (*ofn) free(*ofn);
-			*ofn=lr;
+			if (*ofn) {
+				delete[] * ofn;
+				*ofn = nullptr;
+			}
+			*ofn = lr;
 			while (*lr && *lr!=' ' && *lr!='<' && *lr!='|') lr++;
 			//if it ends on a : => remove it.
 			if((*ofn != lr) && (lr[-1] == ':')) lr[-1] = 0;
-//			if(*lr && *(lr+1))
-//				*lr++=0;
-//			else
-//				*lr=0;
-			t = (char*)malloc(lr-*ofn+1);
-			if (t == nullptr) {
-				E_Exit("SHELL: Could not allocate %u bytes in parser",
-				       static_cast<unsigned int>(lr-*ofn+1));
-			}
-
-			safe_strncpy(t,*ofn,lr-*ofn+1);
-			*ofn=t;
+			temp_len = static_cast<size_t>(lr - *ofn + 1u);
+			temp = new char[temp_len];
+			safe_strncpy(temp, *ofn, temp_len);
+			*ofn = temp;
 			continue;
 		case '<':
-			if (*ifn) free(*ifn);
-			lr=ltrim(lr);
+			if (*ifn) {
+				delete[] * ifn;
+				*ifn = nullptr;
+			}
+			lr = ltrim(lr);
 			*ifn=lr;
 			while (*lr && *lr!=' ' && *lr!='>' && *lr != '|') lr++;
 			if((*ifn != lr) && (lr[-1] == ':')) lr[-1] = 0;
-//			if(*lr && *(lr+1))
-//				*lr++=0;
-//			else
-//				*lr=0;
-			t = (char*)malloc(lr-*ifn+1);
-			if (t == nullptr) {
-				E_Exit("SHELL: Could not allocate %u bytes in parser",
-				       static_cast<unsigned int>(lr-*ifn+1));
-			}
-			safe_strncpy(t,*ifn,lr-*ifn+1);
-			*ifn=t;
+			temp_len = static_cast<size_t>(lr - *ofn + 1u);
+			temp = new char[temp_len];
+			safe_strncpy(temp, *ifn, temp_len);
+			*ifn = temp;
 			continue;
 		case '|':
 			ch=0;
@@ -246,8 +244,8 @@ void DOS_Shell::ParseLine(char * line) {
 
 	/* Do redirection and pipe checks */
 
-	char * in  = 0;
-	char * out = 0;
+	char *in = nullptr;
+	char *out = nullptr;
 
 	Bit16u dummy,dummy2;
 	Bit32u bigdummy = 0;
@@ -295,20 +293,19 @@ void DOS_Shell::ParseLine(char * line) {
 	if(in) {
 		DOS_CloseFile(0);
 		if(normalstdin) DOS_OpenFile("con",OPEN_READWRITE,&dummy);
-		free(in);
+		delete[] in;
 	}
 	if(out) {
 		DOS_CloseFile(1);
 		if(!normalstdin) DOS_OpenFile("con",OPEN_READWRITE,&dummy);
 		if(normalstdout) DOS_OpenFile("con",OPEN_READWRITE,&dummy);
 		if(!normalstdin) DOS_CloseFile(0);
-		free(out);
+		delete[] out;
 	}
 }
 
-
-
-void DOS_Shell::RunInternal(void) {
+void DOS_Shell::RunInternal()
+{
 	char input_line[CMD_MAXLINE] = {0};
 	while (bf) {
 		if (bf->ReadLine(input_line)) {
@@ -325,11 +322,12 @@ void DOS_Shell::RunInternal(void) {
 	}
 }
 
-void DOS_Shell::Run(void) {
+void DOS_Shell::Run()
+{
 	char input_line[CMD_MAXLINE] = {0};
 	std::string line;
 	if (cmd->FindStringRemainBegin("/C",line)) {
-		strcpy(input_line,line.c_str());
+		safe_strcpy(input_line, line.c_str());
 		char* sep = strpbrk(input_line,"\r\n"); //GTA installer
 		if (sep) *sep = 0;
 		DOS_Shell temp;
@@ -340,22 +338,29 @@ void DOS_Shell::Run(void) {
 	}
 	/* Start a normal shell and check for a first command init */
 	if (cmd->FindString("/INIT",line,true)) {
-		WriteOut(MSG_Get("SHELL_STARTUP_BEGIN"),VERSION);
+		const bool wants_welcome_banner = control->GetStartupVerbosity() >=
+		                                  Verbosity::Medium;
+		if (wants_welcome_banner) {
+			WriteOut(MSG_Get("SHELL_STARTUP_BEGIN"),
+			         DOSBOX_GetDetailedVersion());
 #if C_DEBUG
-		WriteOut(MSG_Get("SHELL_STARTUP_DEBUG"));
+			WriteOut(MSG_Get("SHELL_STARTUP_DEBUG"));
 #endif
-		if (machine == MCH_CGA) {
-			if (mono_cga) WriteOut(MSG_Get("SHELL_STARTUP_CGA_MONO"));
-			else WriteOut(MSG_Get("SHELL_STARTUP_CGA"));
+			if (machine == MCH_CGA) {
+				if (mono_cga)
+					WriteOut(MSG_Get("SHELL_STARTUP_CGA_MONO"));
+				else
+					WriteOut(MSG_Get("SHELL_STARTUP_CGA"));
+			}
+			if (machine == MCH_HERC)
+				WriteOut(MSG_Get("SHELL_STARTUP_HERC"));
+			WriteOut(MSG_Get("SHELL_STARTUP_END"));
 		}
-		if (machine == MCH_HERC) WriteOut(MSG_Get("SHELL_STARTUP_HERC"));
-		WriteOut(MSG_Get("SHELL_STARTUP_END"));
-
-		strcpy(input_line,line.c_str());
+		safe_strcpy(input_line, line.c_str());
 		line.erase();
 		ParseLine(input_line);
 	} else {
-		WriteOut(MSG_Get("SHELL_STARTUP_SUB"),VERSION);
+		WriteOut(MSG_Get("SHELL_STARTUP_SUB"), DOSBOX_GetDetailedVersion());
 	}
 	do {
 		if (bf){
@@ -365,20 +370,20 @@ void DOS_Shell::Run(void) {
 						ShowPrompt();
 						WriteOut_NoParsing(input_line);
 						WriteOut_NoParsing("\n");
-					};
-				};
+					}
+				}
 				ParseLine(input_line);
-				if (echo) WriteOut("\n");
 			}
 		} else {
 			if (echo) ShowPrompt();
 			InputCommand(input_line);
 			ParseLine(input_line);
 		}
-	} while (!exit);
+	} while (!exit_requested);
 }
 
-void DOS_Shell::SyntaxError(void) {
+void DOS_Shell::SyntaxError()
+{
 	WriteOut(MSG_Get("SHELL_SYNTAXERROR"));
 }
 
@@ -442,9 +447,10 @@ public:
 		char orig[CROSS_LEN+1];
 		char cross_filesplit[2] = {CROSS_FILESPLIT , 0};
 
-		Bitu dummy = 1;
+		unsigned int command_index = 1;
 		bool command_found = false;
-		while (control->cmdline->FindCommand(dummy++,line) && !command_found) {
+		while (control->cmdline->FindCommand(command_index++, line) &&
+		       !command_found) {
 			struct stat test;
 			if (line.length() > CROSS_LEN) continue;
 			safe_strcpy(buffer, line.c_str());
@@ -473,7 +479,8 @@ public:
 					if(!name) continue;
 				}
 				*name++ = 0;
-				if (access(buffer,F_OK)) continue;
+				if (!path_exists(buffer))
+					continue;
 				autoexec[12].Install(std::string("MOUNT C \"") + buffer + "\"");
 				autoexec[13].Install("C:");
 				/* Save the non-modified filename (so boot and imgmount can use it (long filenames, case sensivitive)) */
@@ -512,13 +519,15 @@ public:
 	}
 };
 
-static AUTOEXEC* test;
+static std::unique_ptr<AUTOEXEC> autoexec_module{};
 
-void AUTOEXEC_Init(Section * sec) {
-	test = new AUTOEXEC(sec);
+void AUTOEXEC_Init(Section *sec)
+{
+	autoexec_module = std::make_unique<AUTOEXEC>(sec);
 }
 
-static Bitu INT2E_Handler(void) {
+static Bitu INT2E_Handler()
+{
 	/* Save return address and current process */
 	RealPt save_ret=real_readd(SegValue(ss),reg_sp);
 	Bit16u save_psp=dos.psp();
@@ -564,6 +573,8 @@ void SHELL_Init() {
 	MSG_Add("SHELL_CMD_HELP","If you want a list of all supported commands type \033[33;1mhelp /all\033[0m .\nA short list of the most often used commands:\n");
 	MSG_Add("SHELL_CMD_ECHO_ON","ECHO is on.\n");
 	MSG_Add("SHELL_CMD_ECHO_OFF","ECHO is off.\n");
+	MSG_Add("SHELL_ILLEGAL_CONTROL_CHARACTER",
+	        "Unexpected control character: Dec %03u and Hex %#04x.\n");
 	MSG_Add("SHELL_ILLEGAL_SWITCH","Illegal switch: %s.\n");
 	MSG_Add("SHELL_MISSING_PARAMETER","Required parameter missing.\n");
 	MSG_Add("SHELL_CMD_CHDIR_ERROR","Unable to change to: %s.\n");
@@ -602,8 +613,8 @@ void SHELL_Init() {
 	MSG_Add("SHELL_CMD_FILE_EXISTS","File %s already exists.\n");
 	MSG_Add("SHELL_CMD_DIR_VOLUME"," Volume in drive %c is %s\n");
 	MSG_Add("SHELL_CMD_DIR_INTRO"," Directory of %s\n");
-	MSG_Add("SHELL_CMD_DIR_BYTES_USED","%16d file(s) %17s bytes\n");
-	MSG_Add("SHELL_CMD_DIR_BYTES_FREE","%16d dir(s)  %17s bytes free\n");
+	MSG_Add("SHELL_CMD_DIR_BYTES_USED","%17d file(s) %21s bytes\n");
+	MSG_Add("SHELL_CMD_DIR_BYTES_FREE","%17d dir(s)  %21s bytes free\n");
 	MSG_Add("SHELL_EXECUTE_DRIVE_NOT_FOUND","Drive %c does not exist!\nYou must \033[31mmount\033[0m it first. Type \033[1;33mintro\033[0m or \033[1;33mintro mount\033[0m for more information.\n");
 	MSG_Add("SHELL_EXECUTE_ILLEGAL_COMMAND","Illegal command: %s.\n");
 	MSG_Add("SHELL_CMD_PAUSE","Press any key to continue...");
@@ -614,43 +625,39 @@ void SHELL_Init() {
 	MSG_Add("SHELL_CMD_SUBST_FAILURE","SUBST failed. You either made an error in your commandline or the target drive is already used.\nIt's only possible to use SUBST on Local drives");
 
 	MSG_Add("SHELL_STARTUP_BEGIN",
-		"\033[44;1m\xC9\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
-		"\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
-		"\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xBB\n"
-		"\xBA \033[32mWelcome to dosbox-staging %-40s\033[37m \xBA\n"
-		"\xBA                                                                    \xBA\n"
-//		"\xBA DOSBox runs real and protected mode games.                         \xBA\n"
-		"\xBA For a short introduction for new users type: \033[33mINTRO\033[37m                 \xBA\n"
-		"\xBA For supported shell commands type: \033[33mHELP\033[37m                            \xBA\n"
-		"\xBA                                                                    \xBA\n"
-		"\xBA To adjust the emulated CPU speed, use \033[31mctrl-F11\033[37m and \033[31mctrl-F12\033[37m.       \xBA\n"
-		"\xBA To activate the keymapper \033[31mctrl-F1\033[37m.                                 \xBA\n"
-		"\xBA For more information read the \033[36mREADME\033[37m file in the DOSBox directory. \xBA\n"
-		"\xBA                                                                    \xBA\n"
-	);
-	MSG_Add("SHELL_STARTUP_CGA","\xBA DOSBox supports Composite CGA mode.                                \xBA\n"
+	        "\033[44;1m\xC9\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
+	        "\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
+	        "\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xBB\n"
+	        "\xBA \033[32mWelcome to DOSBox Staging %-40s\033[37m \xBA\n"
+	        "\xBA                                                                    \xBA\n"
+	        "\xBA For a short introduction for new users type: \033[33mINTRO\033[37m                 \xBA\n"
+	        "\xBA For supported shell commands type: \033[33mHELP\033[37m                            \xBA\n"
+	        "\xBA                                                                    \xBA\n"
+	        "\xBA To adjust the emulated CPU speed, use \033[31mCtrl+F11\033[37m and \033[31mCtrl+F12\033[37m.       \xBA\n"
+	        "\xBA To activate the keymapper \033[31mCtrl+F1\033[37m.                                 \xBA\n"
+	        "\xBA For more information read the \033[36mREADME\033[37m file in the DOSBox directory. \xBA\n"
+	        "\xBA                                                                    \xBA\n");
+	MSG_Add("SHELL_STARTUP_CGA",
+	        "\xBA DOSBox supports Composite CGA mode.                                \xBA\n"
 	        "\xBA Use \033[31mF12\033[37m to set composite output ON, OFF, or AUTO (default).        \xBA\n"
-	        "\xBA \033[31m(Alt-)F11\033[37m changes hue; \033[31mctrl-alt-F11\033[37m selects early/late CGA model.  \xBA\n"
-	        "\xBA                                                                    \xBA\n"
-	);
-	MSG_Add("SHELL_STARTUP_CGA_MONO","\xBA Use \033[31mF11\033[37m to cycle through green, amber, white and paper-white mode, \xBA\n"
-	        "\xBA and \033[31mAlt-F11\033[37m to change contrast/brightness settings.                \xBA\n"
-	);
-	MSG_Add("SHELL_STARTUP_HERC","\xBA Use \033[31mF11\033[37m to cycle through white, amber, and green monochrome color. \xBA\n"
-	        "\xBA                                                                    \xBA\n"
-	);
+	        "\xBA \033[31m(Alt+)F11\033[37m changes hue; \033[31mCtrl+Alt+F11\033[37m selects early/late CGA model.  \xBA\n"
+	        "\xBA                                                                    \xBA\n");
+	MSG_Add("SHELL_STARTUP_CGA_MONO",
+	        "\xBA Use \033[31mF11\033[37m to cycle through green, amber, white and paper-white mode, \xBA\n"
+	        "\xBA and \033[31mAlt+F11\033[37m to change contrast/brightness settings.                \xBA\n");
+	MSG_Add("SHELL_STARTUP_HERC",
+	        "\xBA Use \033[31mF11\033[37m to cycle through white, amber, and green monochrome color. \xBA\n"
+	        "\xBA                                                                    \xBA\n");
 	MSG_Add("SHELL_STARTUP_DEBUG",
-	        "\xBA Press \033[31malt-Pause\033[37m to enter the debugger or start the exe with \033[33mDEBUG\033[37m. \xBA\n"
-	        "\xBA                                                                    \xBA\n"
-	);
+	        "\xBA Press \033[31mAlt+Pause\033[37m to enter the debugger or start the exe with \033[33mDEBUG\033[37m. \xBA\n"
+	        "\xBA                                                                    \xBA\n");
 	MSG_Add("SHELL_STARTUP_END",
-	        "\xBA \033[32mHAVE FUN!\033[37m                                                          \xBA\n"
-	        "\xBA \033[32mThe DOSBox Team \033[33mhttp://www.dosbox.com\033[37m                              \xBA\n"
+	        "\xBA \033[33mhttps://dosbox-staging.github.io\033[37m                                   \xBA\n"
 	        "\xC8\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
 	        "\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
 	        "\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xBC\033[0m\n"
-	        //"\n" //Breaks the startup message if you type a mount and a drive change.
-	);
+	        "\n");
+
 	MSG_Add("SHELL_STARTUP_SUB","\033[32;1mdosbox-staging %s\033[0m\n");
 	MSG_Add("SHELL_CMD_CHDIR_HELP","Displays/changes the current directory.\n");
 	MSG_Add("SHELL_CMD_CHDIR_HELP_LONG","CHDIR [drive:][path]\n"
@@ -660,8 +667,25 @@ void SHELL_Init() {
 	        "  ..   Specifies that you want to change to the parent directory.\n\n"
 	        "Type CD drive: to display the current directory in the specified drive.\n"
 	        "Type CD without parameters to display the current drive and directory.\n");
-	MSG_Add("SHELL_CMD_CLS_HELP","Clear screen.\n");
-	MSG_Add("SHELL_CMD_DIR_HELP","Directory View.\n");
+
+	MSG_Add("SHELL_CMD_CLS_HELP", "Clear the screen.\n");
+
+	MSG_Add("SHELL_CMD_DIR_HELP",
+	        "Displays a list of files and subdirectories in a directory.\n");
+	MSG_Add("SHELL_CMD_DIR_HELP_LONG",
+	        "DIR [drive:][path][filename] [/[W|B]] [/P] [/[AD]|[A-D]] [/O[-][N|E|S|D]]\n"
+	        "\n"
+	        "  [drive:][path][filename]\n"
+	        "              Specifies drive, directory, and/or files to list.\n"
+	        "  /W          Uses wide list format.\n"
+	        "  /B          Uses bare format (no heading information or summary).\n"
+	        "  /P          Pauses after each screenful of information.\n"
+	        "  /AD         Displays all directories.\n"
+	        "  /A-D        Displays all files.\n"
+	        "  /O          List by files in sorted order.\n"
+	        "               -  Prefix to reverse order\n"
+	        "  sortorder    N  By name (alphabetic)       S  By size (smallest first)\n"
+	        "               E  By extension (alphabetic)  D  By date & time (oldest first)\n");
 	MSG_Add("SHELL_CMD_ECHO_HELP","Display messages and enable/disable command echoing.\n");
 	MSG_Add("SHELL_CMD_EXIT_HELP","Exit from the shell.\n");
 	MSG_Add("SHELL_CMD_HELP_HELP","Show help.\n");
@@ -689,6 +713,12 @@ void SHELL_Init() {
 	MSG_Add("SHELL_CMD_CALL_HELP","Start a batch file from within another batch file.\n");
 	MSG_Add("SHELL_CMD_SUBST_HELP","Assign an internal directory to a drive.\n");
 	MSG_Add("SHELL_CMD_LOADHIGH_HELP","Loads a program into upper memory (requires xms=true,umb=true).\n");
+
+	MSG_Add("SHELL_CMD_LS_HELP", "List directory contents.\n");
+	MSG_Add("SHELL_CMD_LS_HELP_LONG", "ls [/?] [PATTERN]\n");
+	MSG_Add("SHELL_CMD_LS_PATH_ERR",
+	        "ls: cannot access '%s': No such file or directory\n");
+
 	MSG_Add("SHELL_CMD_CHOICE_HELP","Waits for a keypress and sets ERRORLEVEL.\n");
 	MSG_Add("SHELL_CMD_CHOICE_HELP_LONG","CHOICE [/C:choices] [/N] [/S] text\n"
 	        "  /C[:]choices  -  Specifies allowable keys.  Default is: yn.\n"
@@ -697,8 +727,27 @@ void SHELL_Init() {
 	        "  text  -  The text to display as a prompt.\n");
 	MSG_Add("SHELL_CMD_ATTRIB_HELP","Does nothing. Provided for compatibility.\n");
 	MSG_Add("SHELL_CMD_PATH_HELP","Provided for compatibility.\n");
-	MSG_Add("SHELL_CMD_VER_HELP","View and set the reported DOS version.\n");
-	MSG_Add("SHELL_CMD_VER_VER","DOSBox version %s. Reported DOS version %d.%02d.\n");
+
+	MSG_Add("SHELL_CMD_VER_HELP", "View or set the reported DOS version.\n");
+	MSG_Add("SHELL_CMD_VER_HELP_LONG", "Usage:\n"
+	        "  \033[32;1mver\033[0m\n"
+	        "  \033[32;1mver\033[0m \033[37;1mset\033[0m \033[36;1mVERSION\033[0m\n"
+	        "\n"
+	        "Where:\n"
+	        "  \033[36;1mVERSION\033[0m can be a whole number, such as \033[36;1m5\033[0m, or include a two-digit decimal\n"
+	        "          value, such as: \033[36;1m6.22\033[0m, \033[36;1m7.01\033[0m, or \033[36;1m7.10\033[0m. The decimal can alternatively be\n"
+	        "          space-separated, such as: \033[36;1m6 22\033[0m, \033[36;1m7 01\033[0m, or \033[36;1m7 10\033[0m.\n"
+	        "\n"
+	        "Notes:\n"
+	        "  The DOS version can also be set in the configuration file under the [dos]\n"
+	        "  section using the \"ver = \033[36;1mVERSION\033[0m\" setting.\n"
+	        "\n"
+	        "Examples:\n"
+	        "  \033[32;1mver\033[0m \033[37;1mset\033[0m \033[36;1m6.22\033[0m\n"
+	        "  \033[32;1mver\033[0m \033[37;1mset\033[0m \033[36;1m7 10\033[0m\n");
+	MSG_Add("SHELL_CMD_VER_VER", "DOSBox Staging version %s\n"
+	                             "DOS version %d.%02d\n");
+	MSG_Add("SHELL_CMD_VER_INVALID", "The specified DOS version is not correct.\n");
 
 	/* Regular startup */
 	call_shellstop=CALLBACK_Allocate();
@@ -769,6 +818,12 @@ void SHELL_Init() {
 	DOS_OpenFile("CON",OPEN_READWRITE,&dummy);	/* STDAUX */
 	DOS_OpenFile("PRN",OPEN_READWRITE,&dummy);	/* STDPRN */
 
+	/* Create appearance of handle inheritance by first shell */
+	for (Bit16u i=0;i<5;i++) {
+		Bit8u handle=psp.GetFileHandle(i);
+		if (Files[handle]) Files[handle]->AddRef();
+	}
+
 	psp.SetParent(psp_seg);
 	/* Set the environment */
 	psp.SetEnvironment(env_seg);
@@ -776,7 +831,7 @@ void SHELL_Init() {
 	CommandTail tail;
 	tail.count=(Bit8u)strlen(init_line);
 	memset(&tail.buffer,0,127);
-	strcpy(tail.buffer,init_line);
+	safe_strcpy(tail.buffer, init_line);
 	MEM_BlockWrite(PhysMake(psp_seg,128),&tail,128);
 
 	/* Setup internal DOS Variables */
@@ -787,5 +842,5 @@ void SHELL_Init() {
 	SHELL_ProgramStart_First_shell(&first_shell);
 	first_shell->Run();
 	delete first_shell;
-	first_shell = 0;//Make clear that it shouldn't be used anymore
+	first_shell = nullptr; // Make clear that it shouldn't be used anymore
 }

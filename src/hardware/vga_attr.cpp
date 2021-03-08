@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -251,7 +251,7 @@ void write_p3c0(Bitu /*port*/,Bitu val,Bitu iolen) {
 				svga.write_p3c0(attr(index), val, iolen);
 				break;
 			}
-			LOG(LOG_VGAMISC,LOG_NORMAL)("VGA:ATTR:Write to unkown Index %2X",attr(index));
+			LOG(LOG_VGAMISC,LOG_NORMAL)("VGA:ATTR:Write to unknown Index %2X",attr(index));
 			break;
 		}
 	}
@@ -279,7 +279,7 @@ Bitu read_p3c1(Bitu /*port*/,Bitu iolen) {
 	default:
 		if (svga.read_p3c1)
 			return svga.read_p3c1(attr(index), iolen);
-		LOG(LOG_VGAMISC,LOG_NORMAL)("VGA:ATTR:Read from unkown Index %2X",attr(index));
+		LOG(LOG_VGAMISC,LOG_NORMAL)("VGA:ATTR:Read from unknown Index %2X",attr(index));
 	}
 	return 0;
 }

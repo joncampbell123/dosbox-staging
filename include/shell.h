@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,20 +16,18 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_SHELL_H
 #define DOSBOX_SHELL_H
 
-#include <ctype.h>
-#ifndef DOSBOX_DOSBOX_H
 #include "dosbox.h"
-#endif
+
+#include <cctype>
+#include <list>
+#include <string>
+
 #ifndef DOSBOX_PROGRAMS_H
 #include "programs.h"
 #endif
-
-#include <string>
-#include <list>
 
 #define CMD_MAXLINE 4096
 #define CMD_MAXCMDS 20
@@ -50,33 +48,35 @@ public:
 	virtual ~BatchFile();
 	virtual bool ReadLine(char * line);
 	bool Goto(char * where);
-	void Shift(void);
-	Bit16u file_handle;
-	Bit32u location;
-	bool echo;
-	DOS_Shell * shell;
-	BatchFile * prev;
-	CommandLine * cmd;
-	std::string filename;
+	void Shift();
+	uint16_t file_handle = 0;
+	uint32_t location = 0;
+	bool echo = false;
+	DOS_Shell *shell = nullptr;
+	BatchFile *prev = nullptr;
+	CommandLine *cmd = nullptr;
+	std::string filename{};
 };
 
 class AutoexecEditor;
 class DOS_Shell : public Program {
 private:
 	friend class AutoexecEditor;
-	std::list<std::string> l_history, l_completion;
+	std::list<std::string> l_history{};
+	std::list<std::string> l_completion{};
 
-	char *completion_start;
-	Bit16u completion_index;
-	
+	char *completion_start = nullptr;
+	uint16_t completion_index = 0;
+
 public:
 
 	DOS_Shell();
+	~DOS_Shell() override;
 	DOS_Shell(const DOS_Shell&) = delete; // prevent copy
 	DOS_Shell& operator=(const DOS_Shell&) = delete; // prevent assignment
-	void Run(void);
-	void RunInternal(void); //for command /C
-/* A load of subfunctions */
+	void Run() override;
+	void RunInternal(); // for command /C
+	/* A load of subfunctions */
 	void ParseLine(char * line);
 	Bitu GetRedirection(char *s, char **ifn, char **ofn,bool * append);
 	void InputCommand(char * line);
@@ -85,9 +85,11 @@ public:
 	bool Execute(char * name,char * args);
 	/* Checks if it matches a hardware-property */
 	bool CheckConfig(char* cmd_in,char*line);
-/* Some internal used functions */
-	char * Which(char * name);
-/* Some supported commands */
+
+	/* Some internal used functions */
+	const char *Which(const char *name) const;
+
+	/* Commands */
 	void CMD_HELP(char * args);
 	void CMD_CLS(char * args);
 	void CMD_COPY(char * args);
@@ -107,7 +109,7 @@ public:
 	void CMD_REM(char * args);
 	void CMD_RENAME(char * args);
 	void CMD_CALL(char * args);
-	void SyntaxError(void);
+	void SyntaxError();
 	void CMD_PAUSE(char * args);
 	void CMD_SUBST(char* args);
 	void CMD_LOADHIGH(char* args);
@@ -116,19 +118,19 @@ public:
 	void CMD_PATH(char * args);
 	void CMD_SHIFT(char * args);
 	void CMD_VER(char * args);
+	void CMD_LS(char *args);
 	/* The shell's variables */
-	Bit16u input_handle;
-	BatchFile * bf;
-	bool echo;
-	bool exit;
-	bool call;
+	uint16_t input_handle = 0;
+	BatchFile *bf = nullptr;
+	bool echo = false;
+	bool call = false;
 };
 
 struct SHELL_Cmd {
-	const char * name;								/* Command name*/
-	Bit32u flags;									/* Flags about the command */
-	void (DOS_Shell::*handler)(char * args);		/* Handler for this command */
-	const char * help;								/* String with command help */
+	const char *name = nullptr;             /* Command name*/
+	uint32_t flags = 0;                     /* Flags about the command */
+	void (DOS_Shell::*handler)(char *args); /* Handler for this command */
+	const char *help = nullptr;             /* String with command help */
 };
 
 /* Object to manage lines in the autoexec.bat The lines get removed from
@@ -136,8 +138,9 @@ struct SHELL_Cmd {
  * as well if the line set a a variable */
 class AutoexecObject{
 private:
-	bool installed;
-	std::string buf;
+	bool installed = false;
+	std::string buf{};
+
 public:
 	AutoexecObject()
 		: installed(false),
@@ -147,7 +150,7 @@ public:
 	void InstallBefore(std::string const &in);
 	~AutoexecObject();
 private:
-	void CreateAutoexec(void);
+	void CreateAutoexec();
 };
 
 #endif

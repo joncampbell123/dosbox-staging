@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,18 +16,18 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
-#include <time.h>
-#include <math.h>
-
 #include "dosbox.h"
-#include "timer.h"
-#include "pic.h"
+
+#include <cmath>
+#include <ctime>
+
+#include "bios_disk.h"
+#include "cross.h"
 #include "inout.h"
 #include "mem.h"
-#include "bios_disk.h"
+#include "pic.h"
 #include "setup.h"
-#include "cross.h" //fmod on certain platforms
+#include "timer.h"
 
 static struct {
 	Bit8u regs[0x40];
@@ -48,9 +48,9 @@ static struct {
 	bool update_ended;
 } cmos;
 
-static void cmos_timerevent(Bitu val) {
+static void cmos_timerevent(Bitu /*val*/) {
 	if (cmos.timer.acknowledged) {
-		cmos.timer.acknowledged=false;
+		cmos.timer.acknowledged = false;
 		PIC_ActivateIRQ(8);
 	}
 	if (cmos.timer.enabled) {
@@ -60,7 +60,7 @@ static void cmos_timerevent(Bitu val) {
 }
 
 static void cmos_checktimer(void) {
-	PIC_RemoveEvents(cmos_timerevent);	
+	PIC_RemoveEvents(cmos_timerevent);
 	if (cmos.timer.div<=2) cmos.timer.div+=7;
 	cmos.timer.delay=(1000.0f/(32768.0f / (1 << (cmos.timer.div - 1))));
 	if (!cmos.timer.div || !cmos.timer.enabled) return;
@@ -72,12 +72,12 @@ static void cmos_checktimer(void) {
 //	status reg A reading with this (and with other delays actually)
 }
 
-void cmos_selreg(Bitu port,Bitu val,Bitu iolen) {
+void cmos_selreg(Bitu /*port*/,Bitu val,Bitu /*iolen*/) {
 	cmos.reg=val & 0x3f;
 	cmos.nmi=(val & 0x80)>0;
 }
 
-static void cmos_writereg(Bitu port,Bitu val,Bitu iolen) {
+static void cmos_writereg(Bitu /*port*/,Bitu val,Bitu /*iolen*/) {
 	switch (cmos.reg) {
 	case 0x00:		/* Seconds */
 	case 0x02:		/* Minutes */
@@ -123,38 +123,35 @@ static void cmos_writereg(Bitu port,Bitu val,Bitu iolen) {
 
 #define MAKE_RETURN(_VAL) (cmos.bcd ? ((((_VAL) / 10) << 4) | ((_VAL) % 10)) : (_VAL));
 
-static Bitu cmos_readreg(Bitu port,Bitu iolen) {
+static Bitu cmos_readreg(Bitu /*port*/,Bitu /*iolen*/) {
 	if (cmos.reg>0x3f) {
 		LOG(LOG_BIOS,LOG_ERROR)("CMOS:Read from illegal register %x",cmos.reg);
 		return 0xff;
 	}
 	Bitu drive_a, drive_b;
 	Bit8u hdparm;
-	time_t curtime;
-	struct tm *loctime;
-	/* Get the current time. */
-	curtime = time (NULL);
 
-	/* Convert it to local time representation. */
-	loctime = localtime (&curtime);
+	const time_t curtime = time(nullptr);
+	struct tm datetime;
+	cross::localtime_r(&curtime, &datetime);
 
 	switch (cmos.reg) {
 	case 0x00:		/* Seconds */
-		return 	MAKE_RETURN(loctime->tm_sec);
+		return MAKE_RETURN(datetime.tm_sec);
 	case 0x02:		/* Minutes */
-		return 	MAKE_RETURN(loctime->tm_min);
+		return MAKE_RETURN(datetime.tm_min);
 	case 0x04:		/* Hours */
-		return 	MAKE_RETURN(loctime->tm_hour);
+		return MAKE_RETURN(datetime.tm_hour);
 	case 0x06:		/* Day of week */
-		return 	MAKE_RETURN(loctime->tm_wday + 1);
+		return MAKE_RETURN(datetime.tm_wday + 1);
 	case 0x07:		/* Date of month */
-		return 	MAKE_RETURN(loctime->tm_mday);
+		return MAKE_RETURN(datetime.tm_mday);
 	case 0x08:		/* Month */
-		return 	MAKE_RETURN(loctime->tm_mon + 1);
+		return MAKE_RETURN(datetime.tm_mon + 1);
 	case 0x09:		/* Year */
-		return 	MAKE_RETURN(loctime->tm_year % 100);
+		return MAKE_RETURN(datetime.tm_year % 100);
 	case 0x32:		/* Century */
-		return 	MAKE_RETURN(loctime->tm_year / 100 + 19);
+		return MAKE_RETURN(datetime.tm_year / 100 + 19);
 	case 0x01:		/* Seconds Alarm */
 	case 0x03:		/* Minutes Alarm */
 	case 0x05:		/* Hours Alarm */
@@ -291,7 +288,7 @@ void CMOS_SetRegister(Bitu regNr, Bit8u val) {
 class CMOS:public Module_base{
 private:
 	IO_ReadHandleObject ReadHandler[2];
-	IO_WriteHandleObject WriteHandler[2];	
+	IO_WriteHandleObject WriteHandler[2];
 public:
 	CMOS(Section* configuration):Module_base(configuration){
 		WriteHandler[0].Install(0x70,cmos_selreg,IO_MB);
@@ -320,7 +317,7 @@ public:
 
 static CMOS* test;
 
-void CMOS_Destroy(Section* sec){
+void CMOS_Destroy(Section* /*sec*/){
 	delete test;
 }
 

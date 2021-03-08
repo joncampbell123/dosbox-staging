@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -85,7 +85,7 @@ enum FPU_Round {
 	ROUND_Chop    = 3
 };
 
-typedef struct {
+typedef struct FPU_rec {
 	FPU_Reg		regs[9];
 	FPU_P_Reg	p_regs[9];
 	FPU_Tag		tags[9];
@@ -95,9 +95,6 @@ typedef struct {
 	FPU_Round	round;
 } FPU_rec;
 
-
-//get pi from a real library
-#define PI		3.14159265358979323846
 #define L2E		1.4426950408889634
 #define L2T		3.3219280948873623
 #define LN2		0.69314718055994531
@@ -153,6 +150,12 @@ static INLINE void FPU_SET_C2(Bitu C){
 static INLINE void FPU_SET_C3(Bitu C){
 	fpu.sw &= ~0x4000;
 	if(C) fpu.sw |= 0x4000;
+}
+
+static INLINE void FPU_LOG_WARN(unsigned tree, bool ea, uintptr_t group, uintptr_t sub)
+{
+	LOG(LOG_FPU, LOG_WARN)("ESC %u%s: Unhandled group %" PRIuPTR " subfunction %" PRIuPTR,
+	                       tree, ea ? " EA" : "", group, sub);
 }
 
 #define DB_FPU_STACK_CHECK_NONE 0

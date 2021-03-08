@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -127,6 +127,7 @@ static void DMA_Write_Port(Bitu port,Bitu val,Bitu /*iolen*/) {
 			case 0x89:GetDMAChannel(6)->SetPage((Bit8u)val);break;
 			case 0x8a:GetDMAChannel(7)->SetPage((Bit8u)val);break;
 			case 0x8b:GetDMAChannel(5)->SetPage((Bit8u)val);break;
+			case 0x8f:GetDMAChannel(4)->SetPage((Bit8u)val);break;
 		}
 	}
 }
@@ -148,6 +149,7 @@ static Bitu DMA_Read_Port(Bitu port,Bitu iolen) {
 		case 0x89:return GetDMAChannel(6)->pagenum;
 		case 0x8a:return GetDMAChannel(7)->pagenum;
 		case 0x8b:return GetDMAChannel(5)->pagenum;
+		case 0x8f:return GetDMAChannel(4)->pagenum;
 	}
 	return 0;
 }
@@ -264,22 +266,27 @@ Bitu DmaController::ReadControllerReg(Bitu reg,Bitu /*len*/) {
 	return 0xffffffff;
 }
 
-DmaChannel::DmaChannel(Bit8u num, bool dma16) {
-	masked = true;
-	callback = NULL;
-	if(num == 4) return;
+DmaChannel::DmaChannel(uint8_t num, bool dma16)
+        : pagebase(0),
+          baseaddr(0),
+          curraddr(0),
+          basecnt(0),
+          currcnt(0),
+          channum(0),
+          pagenum(0),
+          DMA16(0x0),
+          increment(false),
+          autoinit(false),
+          masked(true),
+          tcount(false),
+          request(false),
+          callback(nullptr)
+{
+	if (num == 4)
+		return;
 	channum = num;
 	DMA16 = dma16 ? 0x1 : 0x0;
-	pagenum = 0;
-	pagebase = 0;
-	baseaddr = 0;
-	curraddr = 0;
-	basecnt = 0;
-	currcnt = 0;
 	increment = true;
-	autoinit = false;
-	tcount = false;
-	request = false;
 }
 
 Bitu DmaChannel::Read(Bitu want, Bit8u * buffer) {
@@ -346,15 +353,17 @@ again:
 	return done;
 }
 
-class DMA:public Module_base{
+class DMA : public Module_base {
 public:
-	DMA(Section* configuration):Module_base(configuration){
-		Bitu i;
+	DMA(Section *configuration) : Module_base(configuration)
+	{
 		DmaControllers[0] = new DmaController(0);
-		if (IS_EGAVGA_ARCH) DmaControllers[1] = new DmaController(1);
-		else DmaControllers[1] = NULL;
-	
-		for (i=0;i<0x10;i++) {
+		if (IS_EGAVGA_ARCH)
+			DmaControllers[1] = new DmaController(1);
+		else
+			DmaControllers[1] = nullptr;
+
+		for (Bitu i = 0; i < 0x10; i++) {
 			Bitu mask=IO_MB;
 			if (i<8) mask|=IO_MW;
 			/* install handler for first DMA controller ports */
@@ -366,16 +375,18 @@ public:
 				DmaControllers[1]->DMA_ReadHandler[i].Install(0xc0+i*2,DMA_Read_Port,mask);
 			}
 		}
-		/* install handlers for ports 0x81-0x83 (on the first DMA controller) */
+		/* install handlers for ports 0x81-0x83,0x87 (on the first DMA controller) */
 		DmaControllers[0]->DMA_WriteHandler[0x10].Install(0x81,DMA_Write_Port,IO_MB,3);
 		DmaControllers[0]->DMA_ReadHandler[0x10].Install(0x81,DMA_Read_Port,IO_MB,3);
 		DmaControllers[0]->DMA_WriteHandler[0x11].Install(0x87,DMA_Write_Port,IO_MB,1);
 		DmaControllers[0]->DMA_ReadHandler[0x11].Install(0x87,DMA_Read_Port,IO_MB,1);
 
 		if (IS_EGAVGA_ARCH) {
-			/* install handlers for ports 0x89-0x8B (on the second DMA controller) */
+			/* install handlers for ports 0x89-0x8b,0x8f (on the second DMA controller) */
 			DmaControllers[1]->DMA_WriteHandler[0x10].Install(0x89,DMA_Write_Port,IO_MB,3);
 			DmaControllers[1]->DMA_ReadHandler[0x10].Install(0x89,DMA_Read_Port,IO_MB,3);
+			DmaControllers[1]->DMA_WriteHandler[0x11].Install(0x8f,DMA_Write_Port,IO_MB,1);
+			DmaControllers[1]->DMA_ReadHandler[0x11].Install(0x8f,DMA_Read_Port,IO_MB,1);
 		}
 	}
 	~DMA(){

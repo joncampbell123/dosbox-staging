@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -24,53 +27,60 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <string>
 #include <vector>
 
-#include "callback.h"
-#include "regs.h"
 #include "bios.h"
-#include "drives.h"
-#include "support.h"
+#include "callback.h"
 #include "control.h"
+#include "cross.h"
+#include "drives.h"
+#include "paging.h"
+#include "regs.h"
+#include "string_utils.h"
+#include "support.h"
+#include "../ints/int10.h"
 
-static SHELL_Cmd cmd_list[]={
-{	"DIR",		0,			&DOS_Shell::CMD_DIR,		"SHELL_CMD_DIR_HELP"},
-{	"CHDIR",	1,			&DOS_Shell::CMD_CHDIR,		"SHELL_CMD_CHDIR_HELP"},
-{	"ATTRIB",	1,			&DOS_Shell::CMD_ATTRIB,		"SHELL_CMD_ATTRIB_HELP"},
-{	"CALL",		1,			&DOS_Shell::CMD_CALL,		"SHELL_CMD_CALL_HELP"},
-{	"CD",		0,			&DOS_Shell::CMD_CHDIR,		"SHELL_CMD_CHDIR_HELP"},
-{	"CHOICE",	1,			&DOS_Shell::CMD_CHOICE,		"SHELL_CMD_CHOICE_HELP"},
-{	"CLS",		0,			&DOS_Shell::CMD_CLS,		"SHELL_CMD_CLS_HELP"},
-{	"COPY",		0,			&DOS_Shell::CMD_COPY,		"SHELL_CMD_COPY_HELP"},
-{	"DATE",		0,			&DOS_Shell::CMD_DATE,		"SHELL_CMD_DATE_HELP"},
-{	"DEL",		0,			&DOS_Shell::CMD_DELETE,		"SHELL_CMD_DELETE_HELP"},
-{	"DELETE",	1,			&DOS_Shell::CMD_DELETE,		"SHELL_CMD_DELETE_HELP"},
-{	"ERASE",	1,			&DOS_Shell::CMD_DELETE,		"SHELL_CMD_DELETE_HELP"},
-{	"ECHO",		1,			&DOS_Shell::CMD_ECHO,		"SHELL_CMD_ECHO_HELP"},
-{	"EXIT",		0,			&DOS_Shell::CMD_EXIT,		"SHELL_CMD_EXIT_HELP"},
-{	"GOTO",		1,			&DOS_Shell::CMD_GOTO,		"SHELL_CMD_GOTO_HELP"},
-{	"HELP",		1,			&DOS_Shell::CMD_HELP,		"SHELL_CMD_HELP_HELP"},
-{	"IF",		1,			&DOS_Shell::CMD_IF,			"SHELL_CMD_IF_HELP"},
-{	"LOADHIGH",	1,			&DOS_Shell::CMD_LOADHIGH, 	"SHELL_CMD_LOADHIGH_HELP"},
-{	"LH",		1,			&DOS_Shell::CMD_LOADHIGH,	"SHELL_CMD_LOADHIGH_HELP"},
-{	"MKDIR",	1,			&DOS_Shell::CMD_MKDIR,		"SHELL_CMD_MKDIR_HELP"},
-{	"MD",		0,			&DOS_Shell::CMD_MKDIR,		"SHELL_CMD_MKDIR_HELP"},
-{	"PATH",		1,			&DOS_Shell::CMD_PATH,		"SHELL_CMD_PATH_HELP"},
-{	"PAUSE",	1,			&DOS_Shell::CMD_PAUSE,		"SHELL_CMD_PAUSE_HELP"},
-{	"RMDIR",	1,			&DOS_Shell::CMD_RMDIR,		"SHELL_CMD_RMDIR_HELP"},
-{	"RD",		0,			&DOS_Shell::CMD_RMDIR,		"SHELL_CMD_RMDIR_HELP"},
-{	"REM",		1,			&DOS_Shell::CMD_REM,		"SHELL_CMD_REM_HELP"},
-{	"RENAME",	1,			&DOS_Shell::CMD_RENAME,		"SHELL_CMD_RENAME_HELP"},
-{	"REN",		0,			&DOS_Shell::CMD_RENAME,		"SHELL_CMD_RENAME_HELP"},
-{	"SET",		1,			&DOS_Shell::CMD_SET,		"SHELL_CMD_SET_HELP"},
-{	"SHIFT",	1,			&DOS_Shell::CMD_SHIFT,		"SHELL_CMD_SHIFT_HELP"},
-{	"SUBST",	1,			&DOS_Shell::CMD_SUBST,		"SHELL_CMD_SUBST_HELP"},
-{	"TIME",		0,			&DOS_Shell::CMD_TIME,		"SHELL_CMD_TIME_HELP"},
-{	"TYPE",		0,			&DOS_Shell::CMD_TYPE,		"SHELL_CMD_TYPE_HELP"},
-{	"VER",		0,			&DOS_Shell::CMD_VER,		"SHELL_CMD_VER_HELP"},
-{0,0,0,0}
+// clang-format off
+static SHELL_Cmd cmd_list[] = {
+	{ "ATTRIB",   1, &DOS_Shell::CMD_ATTRIB,   "SHELL_CMD_ATTRIB_HELP" },
+	{ "CALL",     1, &DOS_Shell::CMD_CALL,     "SHELL_CMD_CALL_HELP" },
+	{ "CD",       0, &DOS_Shell::CMD_CHDIR,    "SHELL_CMD_CHDIR_HELP" },
+	{ "CHDIR",    1, &DOS_Shell::CMD_CHDIR,    "SHELL_CMD_CHDIR_HELP" },
+	{ "CHOICE",   1, &DOS_Shell::CMD_CHOICE,   "SHELL_CMD_CHOICE_HELP" },
+	{ "CLS",      0, &DOS_Shell::CMD_CLS,      "SHELL_CMD_CLS_HELP" },
+	{ "COPY",     0, &DOS_Shell::CMD_COPY,     "SHELL_CMD_COPY_HELP" },
+	{ "DATE",     0, &DOS_Shell::CMD_DATE,     "SHELL_CMD_DATE_HELP" },
+	{ "DEL",      0, &DOS_Shell::CMD_DELETE,   "SHELL_CMD_DELETE_HELP" },
+	{ "DELETE",   1, &DOS_Shell::CMD_DELETE,   "SHELL_CMD_DELETE_HELP" },
+	{ "DIR",      0, &DOS_Shell::CMD_DIR,      "SHELL_CMD_DIR_HELP" },
+	{ "ECHO",     1, &DOS_Shell::CMD_ECHO,     "SHELL_CMD_ECHO_HELP" },
+	{ "ERASE",    1, &DOS_Shell::CMD_DELETE,   "SHELL_CMD_DELETE_HELP" },
+	{ "EXIT",     0, &DOS_Shell::CMD_EXIT,     "SHELL_CMD_EXIT_HELP" },
+	{ "GOTO",     1, &DOS_Shell::CMD_GOTO,     "SHELL_CMD_GOTO_HELP" },
+	{ "HELP",     1, &DOS_Shell::CMD_HELP,     "SHELL_CMD_HELP_HELP" },
+	{ "IF",       1, &DOS_Shell::CMD_IF,       "SHELL_CMD_IF_HELP" },
+	{ "LH",       1, &DOS_Shell::CMD_LOADHIGH, "SHELL_CMD_LOADHIGH_HELP" },
+	{ "LOADHIGH", 1, &DOS_Shell::CMD_LOADHIGH, "SHELL_CMD_LOADHIGH_HELP" },
+	{ "MD",       0, &DOS_Shell::CMD_MKDIR,    "SHELL_CMD_MKDIR_HELP" },
+	{ "MKDIR",    1, &DOS_Shell::CMD_MKDIR,    "SHELL_CMD_MKDIR_HELP" },
+	{ "PATH",     1, &DOS_Shell::CMD_PATH,     "SHELL_CMD_PATH_HELP" },
+	{ "PAUSE",    1, &DOS_Shell::CMD_PAUSE,    "SHELL_CMD_PAUSE_HELP" },
+	{ "RD",       0, &DOS_Shell::CMD_RMDIR,    "SHELL_CMD_RMDIR_HELP" },
+	{ "REM",      1, &DOS_Shell::CMD_REM,      "SHELL_CMD_REM_HELP" },
+	{ "REN",      0, &DOS_Shell::CMD_RENAME,   "SHELL_CMD_RENAME_HELP" },
+	{ "RENAME",   1, &DOS_Shell::CMD_RENAME,   "SHELL_CMD_RENAME_HELP" },
+	{ "RMDIR",    1, &DOS_Shell::CMD_RMDIR,    "SHELL_CMD_RMDIR_HELP" },
+	{ "SET",      1, &DOS_Shell::CMD_SET,      "SHELL_CMD_SET_HELP" },
+	{ "SHIFT",    1, &DOS_Shell::CMD_SHIFT,    "SHELL_CMD_SHIFT_HELP" },
+	{ "SUBST",    1, &DOS_Shell::CMD_SUBST,    "SHELL_CMD_SUBST_HELP" },
+	{ "TIME",     0, &DOS_Shell::CMD_TIME,     "SHELL_CMD_TIME_HELP" },
+	{ "TYPE",     0, &DOS_Shell::CMD_TYPE,     "SHELL_CMD_TYPE_HELP" },
+	{ "VER",      0, &DOS_Shell::CMD_VER,      "SHELL_CMD_VER_HELP" },
+	{ 0, 0, 0, 0 }
 };
+// clang-format on
 
 /* support functions */
 static char empty_char = 0;
@@ -85,7 +95,8 @@ static void StripSpaces(char*&args,char also) {
 		args++;
 }
 
-static char* ExpandDot(char*args, char* buffer , size_t bufsize) {
+static char *ExpandDot(const char *args, char *buffer, size_t bufsize)
+{
 	if (*args == '.') {
 		if (*(args+1) == 0){
 			safe_strncpy(buffer, "*.*", bufsize);
@@ -102,8 +113,6 @@ static char* ExpandDot(char*args, char* buffer , size_t bufsize) {
 	else safe_strncpy(buffer,args, bufsize);
 	return buffer;
 }
-
-
 
 bool DOS_Shell::CheckConfig(char *cmd_in, char *line) {
 	Section* test = control->GetSectionFromProperty(cmd_in);
@@ -150,8 +159,9 @@ void DOS_Shell::DoCommand(char * line) {
 		*cmd_write++=*line++;
 	}
 	*cmd_write=0;
-	if (strlen(cmd_buffer) == 0) return;
-/* Check the internal list */
+	if (is_empty(cmd_buffer))
+		return;
+	/* Check the internal list */
 	Bit32u cmd_index=0;
 	while (cmd_list[cmd_index].name) {
 		if (strcasecmp(cmd_list[cmd_index].name,cmd_buffer) == 0) {
@@ -176,10 +186,13 @@ void DOS_Shell::DoCommand(char * line) {
 		return; \
 	}
 
-void DOS_Shell::CMD_CLS(char * args) {
+void DOS_Shell::CMD_CLS(char *args)
+{
 	HELP("CLS");
-	reg_ax=0x0003;
-	CALLBACK_RunRealInt(0x10);
+	const auto rows = real_readb(BIOSMEM_SEG, BIOSMEM_NB_ROWS);
+	const auto cols = real_readw(BIOSMEM_SEG, BIOSMEM_NB_COLS);
+	INT10_ScrollWindow(0, 0, rows, static_cast<uint8_t>(cols), -rows, 0x7, 0xff);
+	INT10_SetCursorPos(0, 0, 0);
 }
 
 void DOS_Shell::CMD_DELETE(char * args) {
@@ -255,7 +268,7 @@ void DOS_Shell::CMD_RENAME(char * args){
 
 		char dir_source[DOS_PATHLENGTH + 4] = {0}; //not sure if drive portion is included in pathlength
 		//Copy first and then modify, makes GCC happy
-		safe_strncpy(dir_source,arg1,DOS_PATHLENGTH + 4);
+		safe_strcpy(dir_source, arg1);
 		char* dummy = strrchr(dir_source,'\\');
 		if (!dummy) { //Possible due to length
 			WriteOut(MSG_Get("SHELL_ILLEGAL_PATH"));
@@ -268,7 +281,7 @@ void DOS_Shell::CMD_RENAME(char * args){
 
 		//dir_source and target are introduced for when we support multiple files being renamed.
 		char target[DOS_PATHLENGTH+CROSS_LEN + 5] = {0};
-		strcpy(target,dir_source);
+		safe_strcpy(target, dir_source);
 		strncat(target,args,CROSS_LEN);
 
 		DOS_Rename(arg1,target);
@@ -286,7 +299,7 @@ void DOS_Shell::CMD_ECHO(char * args){
 	}
 	char buffer[512];
 	char* pbuffer = buffer;
-	safe_strncpy(buffer,args,512);
+	safe_strcpy(buffer, args);
 	StripSpaces(pbuffer);
 	if (strcasecmp(pbuffer,"OFF") == 0) {
 		echo=false;
@@ -306,10 +319,10 @@ void DOS_Shell::CMD_ECHO(char * args){
 	} else WriteOut("%s\r\n",args);
 }
 
-
-void DOS_Shell::CMD_EXIT(char * args) {
+void DOS_Shell::CMD_EXIT(char *args)
+{
 	HELP("EXIT");
-	exit = true;
+	exit_requested = true;
 }
 
 void DOS_Shell::CMD_CHDIR(char * args) {
@@ -393,28 +406,38 @@ void DOS_Shell::CMD_RMDIR(char * args) {
 	}
 }
 
-static void FormatNumber(Bit32u num,char * buf) {
-	Bit32u numm,numk,numb,numg;
-	numb=num % 1000;
-	num/=1000;
-	numk=num % 1000;
-	num/=1000;
-	numm=num % 1000;
-	num/=1000;
-	numg=num;
-	if (numg) {
-		sprintf(buf,"%d,%03d,%03d,%03d",numg,numm,numk,numb);
-		return;
-	};
-	if (numm) {
-		sprintf(buf,"%d,%03d,%03d",numm,numk,numb);
-		return;
-	};
-	if (numk) {
-		sprintf(buf,"%d,%03d",numk,numb);
-		return;
-	};
-	sprintf(buf,"%d",numb);
+static std::string format_number(size_t num)
+{
+	MAYBE_UNUSED constexpr uint64_t petabyte_si = 1'000'000'000'000'000;
+	assert(num <= petabyte_si);
+	const auto b = static_cast<unsigned>(num % 1000);
+	num /= 1000;
+	const auto kb = static_cast<unsigned>(num % 1000);
+	num /= 1000;
+	const auto mb = static_cast<unsigned>(num % 1000);
+	num /= 1000;
+	const auto gb = static_cast<unsigned>(num % 1000);
+	num /= 1000;
+	const auto tb = static_cast<unsigned>(num);
+	char buf[22];
+	if (tb) {
+		safe_sprintf(buf, "%u,%03u,%03u,%03u,%03u", tb, gb, mb, kb, b);
+		return buf;
+	}
+	if (gb) {
+		safe_sprintf(buf, "%u,%03u,%03u,%03u", gb, mb, kb, b);
+		return buf;
+	}
+	if (mb) {
+		safe_sprintf(buf, "%u,%03u,%03u", mb, kb, b);
+		return buf;
+	}
+	if (kb) {
+		safe_sprintf(buf, "%u,%03u", kb, b);
+		return buf;
+	}
+	sprintf(buf, "%u", b);
+	return buf;
 }
 
 struct DtaResult {
@@ -440,11 +463,102 @@ struct DtaResult {
 
 };
 
+static std::string to_search_pattern(const char *arg)
+{
+	std::string pattern = arg;
+	trim(pattern);
+
+	const char last_char = (pattern.length() > 0 ? pattern.back() : '\0');
+	switch (last_char) {
+	case '\0': // No arguments, search for all.
+		pattern = "*.*";
+		break;
+	case '\\': // Handle \, C:\, etc.
+	case ':':  // Handle C:, etc.
+		pattern += "*.*";
+		break;
+	default: break;
+	}
+
+	// Handle patterns starting with a dot.
+	char buffer[CROSS_LEN];
+	pattern = ExpandDot(pattern.c_str(), buffer, sizeof(buffer));
+
+	// When there's no wildcard and target is a directory then search files
+	// inside the directory.
+	const char *p = pattern.c_str();
+	if (!strrchr(p, '*') && !strrchr(p, '?')) {
+		uint16_t attr = 0;
+		if (DOS_GetFileAttr(p, &attr) && (attr & DOS_ATTR_DIRECTORY))
+			pattern += "\\*.*";
+	}
+
+	// If no extension, list all files.
+	// This makes patterns like foo* work.
+	if (!strrchr(pattern.c_str(), '.'))
+		pattern += ".*";
+
+	return pattern;
+}
+
+// Map a vector of dir contents to a vector of word widths.
+static std::vector<int> to_name_lengths(const std::vector<DtaResult> &dir_contents,
+                                        int padding)
+{
+	std::vector<int> ret;
+	ret.reserve(dir_contents.size());
+	for (const auto &entry : dir_contents) {
+		const int len = static_cast<int>(strlen(entry.name));
+		ret.push_back(len + padding);
+	}
+	return ret;
+}
+
+static std::vector<int> calc_column_widths(const std::vector<int> &word_widths,
+                                           int min_col_width)
+{
+	assert(min_col_width > 0);
+
+	// Actual terminal width (number of text columns) using current text
+	// mode; in practice it's either 40, 80, or 132.
+	const int term_width = real_readw(BIOSMEM_SEG, BIOSMEM_NB_COLS);
+
+	// Use term_width-1 because we never want to print line up to the actual
+	// limit; this would cause unnecessary line wrapping
+	const size_t max_columns = (term_width - 1) / min_col_width;
+	std::vector<int> col_widths(max_columns);
+
+	// This function returns true when column number is too high to fit
+	// words into a terminal width.  If it returns false, then the first
+	// coln integers in col_widths vector describe the column widths.
+	auto too_many_columns = [&](size_t coln) -> bool {
+		std::fill(col_widths.begin(), col_widths.end(), 0);
+		if (coln <= 1)
+			return false;
+		int max_line_width = 0; // tally of the longest line
+		int c = 0;              // current columnt
+		for (const int width : word_widths) {
+			const int old_col_width = col_widths[c];
+			const int new_col_width = std::max(old_col_width, width);
+			col_widths[c] = new_col_width;
+			max_line_width += (new_col_width - old_col_width);
+			if (max_line_width >= term_width)
+				return true;
+			c = (c + 1) % coln;
+		}
+		return false;
+	};
+
+	size_t col_count = max_columns;
+	while (too_many_columns(col_count)) {
+		col_count--;
+		col_widths.pop_back();
+	}
+	return col_widths;
+}
 
 void DOS_Shell::CMD_DIR(char * args) {
 	HELP("DIR");
-	char numformat[16];
-	char path[DOS_PATHLENGTH];
 
 	std::string line;
 	if (GetEnvStr("DIRCMD",line)){
@@ -491,36 +605,11 @@ void DOS_Shell::CMD_DIR(char * args) {
 		return;
 	}
 
-	char buffer[CROSS_LEN];
-	args = trim(args);
-	size_t argLen = strlen(args);
-	if (argLen == 0) {
-		strcpy(args,"*.*"); //no arguments.
-	} else {
-		switch (args[argLen-1])
-		{
-		case '\\':	// handle \, C:\, etc.
-		case ':' :	// handle C:, etc.
-			strcat(args,"*.*");
-			break;
-		default:
-			break;
-		}
-	}
-	args = ExpandDot(args,buffer,CROSS_LEN);
-
-	if (!strrchr(args,'*') && !strrchr(args,'?')) {
-		Bit16u attribute=0;
-		if (DOS_GetFileAttr(args,&attribute) && (attribute&DOS_ATTR_DIRECTORY) ) {
-			strcat(args,"\\*.*");	// if no wildcard and a directory, get its files
-		}
-	}
-	if (!strrchr(args,'.')) {
-		strcat(args,".*");	// if no extension, get them all
-	}
+	const std::string pattern = to_search_pattern(args);
 
 	/* Make a full path in the args */
-	if (!DOS_Canonicalize(args,path)) {
+	char path[DOS_PATHLENGTH];
+	if (!DOS_Canonicalize(pattern.c_str(), path)) {
 		WriteOut(MSG_Get("SHELL_ILLEGAL_PATH"));
 		return;
 	}
@@ -537,14 +626,15 @@ void DOS_Shell::CMD_DIR(char * args) {
 		*last_dir_sep = '\0';
 
 	const char drive_letter = path[0];
-	const size_t drive_idx = drive_letter - 'A';
+	const auto drive_idx = drive_index(drive_letter);
 	const bool print_label = (drive_letter >= 'A') && Drives[drive_idx];
 	unsigned p_count = 0; // line counter for 'pause' command
 
 	if (!optB) {
 		if (print_label) {
-			const char *label = Drives[drive_idx]->GetLabel();
-			WriteOut(MSG_Get("SHELL_CMD_DIR_VOLUME"), drive_letter, label);
+			const auto label = To_Label(Drives[drive_idx]->GetLabel());
+			WriteOut(MSG_Get("SHELL_CMD_DIR_VOLUME"), drive_letter,
+			         label.c_str());
 			p_count += 1;
 		}
 		WriteOut(MSG_Get("SHELL_CMD_DIR_INTRO"), path);
@@ -553,13 +643,21 @@ void DOS_Shell::CMD_DIR(char * args) {
 	}
 
 	// Helper function to handle 'Press any key to continue' message
-	// regardless of specific formatting below.
-	// Call it whenever a newline gets printed.
+	// regardless of user-selected formatting of DIR command output.
 	//
-	// TODO: DIR code assumes, that terminal size is 80x25
+	// Call it whenever a newline gets printed to potentially display
+	// this one-line message.
+	//
+	// For some strange reason number of columns stored in BIOS segment
+	// is exact, while number of rows is 0-based (so 80x25 mode is
+	// represented as 80x24).  It's convenient for us, as it means we can
+	// get away with (p_count % term_rows) instead of
+	// (p_count % (term_rows - 1)).
+	//
+	const int term_rows = real_readb(BIOSMEM_SEG, BIOSMEM_NB_ROWS);
 	auto show_press_any_key = [&]() {
 		p_count += 1;
-		if (optP && (p_count % 24) == 0)
+		if (optP && (p_count % term_rows) == 0)
 			CMD_PAUSE(empty_string);
 	};
 
@@ -569,9 +667,12 @@ void DOS_Shell::CMD_DIR(char * args) {
 	RealPt save_dta=dos.dta();
 	dos.dta(dos.tables.tempdta);
 	DOS_DTA dta(dos.dta());
-	bool ret=DOS_FindFirst(args,0xffff & ~DOS_ATTR_VOLUME);
+
+	bool ret = DOS_FindFirst(pattern.c_str(), 0xffff & ~DOS_ATTR_VOLUME);
 	if (!ret) {
-		if (!optB) WriteOut(MSG_Get("SHELL_CMD_FILE_NOT_FOUND"),args);
+		if (!optB)
+			WriteOut(MSG_Get("SHELL_CMD_FILE_NOT_FOUND"),
+			         pattern.c_str());
 		dos.dta(save_dta);
 		return;
 	}
@@ -590,7 +691,7 @@ void DOS_Shell::CMD_DIR(char * args) {
 
 		results.push_back(result);
 
-	} while ( (ret=DOS_FindNext()) );
+	} while (DOS_FindNext());
 
 	if (optON) {
 		// Sort by name
@@ -681,12 +782,13 @@ void DOS_Shell::CMD_DIR(char * args) {
 		}
 
 		if (is_dir) {
-			WriteOut("%-8s %-3s   %-16s %02d-%02d-%04d %2d:%02d\n",
+			WriteOut("%-8s %-3s   %-21s %02d-%02d-%04d %2d:%02d\n",
 			         name, ext, "<DIR>", day, month, year, hour, minute);
 		} else {
-			FormatNumber(size, numformat);
-			WriteOut("%-8s %-3s   %16s %02d-%02d-%04d %2d:%02d\n",
-			         name, ext, numformat, day, month, year, hour, minute);
+			const auto file_size = format_number(size);
+			WriteOut("%-8s %-3s   %21s %02d-%02d-%04d %2d:%02d\n",
+			         name, ext, file_size.c_str(), day, month, year,
+			         hour, minute);
 		}
 		show_press_any_key();
 	}
@@ -700,38 +802,113 @@ void DOS_Shell::CMD_DIR(char * args) {
 
 	// Show the summary of results
 	if (!optB) {
-		FormatNumber(byte_count, numformat);
-		WriteOut(MSG_Get("SHELL_CMD_DIR_BYTES_USED"), file_count, numformat);
+		const auto bytes_used = format_number(byte_count);
+		WriteOut(MSG_Get("SHELL_CMD_DIR_BYTES_USED"), file_count,
+		         bytes_used.c_str());
 		show_press_any_key();
 
-		Bit8u drive = dta.GetSearchDrive();
-		Bitu free_space = 1024 * 1024 * 100;
+		uint8_t drive = dta.GetSearchDrive();
+		size_t free_space = 1024 * 1024 * 100;
 		if (Drives[drive]) {
-			Bit16u bytes_sector;
-			Bit8u  sectors_cluster;
-			Bit16u total_clusters;
-			Bit16u free_clusters;
+			uint16_t bytes_sector;
+			uint8_t sectors_cluster;
+			uint16_t total_clusters;
+			uint16_t free_clusters;
 			Drives[drive]->AllocationInfo(&bytes_sector,
 			                              &sectors_cluster,
 			                              &total_clusters,
 			                              &free_clusters);
-			free_space = bytes_sector * sectors_cluster * free_clusters;
+			free_space = bytes_sector;
+			free_space *= sectors_cluster;
+			free_space *= free_clusters;
 		}
-		FormatNumber(free_space, numformat);
-		WriteOut(MSG_Get("SHELL_CMD_DIR_BYTES_FREE"), dir_count, numformat);
-		show_press_any_key();
+		const auto bytes = format_number(free_space);
+		WriteOut(MSG_Get("SHELL_CMD_DIR_BYTES_FREE"), dir_count,
+		         bytes.c_str());
 	}
 	dos.dta(save_dta);
 }
 
-struct copysource {
-	std::string filename;
-	bool concat;
-	copysource(std::string filein,bool concatin):
-		filename(filein),concat(concatin){ };
-	copysource():filename(""),concat(false){ };
-};
+void DOS_Shell::CMD_LS(char *args)
+{
+	using namespace std::string_literals;
 
+	HELP("LS");
+
+	const RealPt original_dta = dos.dta();
+	dos.dta(dos.tables.tempdta);
+	DOS_DTA dta(dos.dta());
+
+	const std::string pattern = to_search_pattern(args);
+	if (!DOS_FindFirst(pattern.c_str(), 0xffff & ~DOS_ATTR_VOLUME)) {
+		WriteOut(MSG_Get("SHELL_CMD_LS_PATH_ERR"), trim(args));
+		dos.dta(original_dta);
+		return;
+	}
+
+	std::vector<DtaResult> dir_contents;
+	// reserve space for as many as we can fit into a single memory page
+	// nothing more to it; make it larger if necessary
+	dir_contents.reserve(MEM_PAGE_SIZE / sizeof(DtaResult));
+
+	do {
+		DtaResult result;
+		dta.GetResult(result.name, result.size, result.date,
+		              result.time, result.attr);
+		if (result.name == "."s || result.name == ".."s)
+			continue;
+		dir_contents.push_back(result);
+	} while (DOS_FindNext());
+
+	const int column_sep = 2; // chars separating columns
+	const auto word_widths = to_name_lengths(dir_contents, column_sep);
+	const auto column_widths = calc_column_widths(word_widths, column_sep + 1);
+	const size_t cols = column_widths.size();
+
+	size_t w_count = 0;
+
+	constexpr int ansi_blue = 34;
+	constexpr int ansi_green = 32;
+	auto write_color = [&](int color, const std::string &txt, int width) {
+		const int padr = width - static_cast<int>(txt.size());
+		WriteOut("\033[%d;1m%s\033[0m%-*s", color, txt.c_str(), padr, "");
+	};
+
+	for (const auto &entry : dir_contents) {
+		std::string name = entry.name;
+		const bool is_dir = entry.attr & DOS_ATTR_DIRECTORY;
+		const size_t col = w_count % cols;
+		const int cw = column_widths[col];
+
+		if (is_dir) {
+			upcase(name);
+			write_color(ansi_blue, name, cw);
+		} else {
+			lowcase(name);
+			if (is_executable_filename(name))
+				write_color(ansi_green, name, cw);
+			else
+				WriteOut("%-*s", cw, name.c_str());
+		}
+
+		++w_count;
+		if (w_count % cols == 0)
+			WriteOut_NoParsing("\n");
+	}
+	dos.dta(original_dta);
+}
+
+struct copysource {
+	std::string filename = "";
+	bool concat = false;
+
+	copysource() = default;
+
+	copysource(const std::string &file, bool cat)
+	        : filename(file),
+	          concat(cat)
+	{}
+};
 
 void DOS_Shell::CMD_COPY(char * args) {
 	HELP("COPY");
@@ -771,11 +948,12 @@ void DOS_Shell::CMD_COPY(char * args) {
 			if (plus == source_p && sources.size()) {
 				sources[sources.size() - 1].concat = true;
 				// If spaces also followed plus then item is only a plus.
-				if (strlen(++source_p) == 0) break;
+				if (is_empty(++source_p))
+					break;
 				plus = strchr(source_p,'+');
 			}
 			if (plus) *plus++ = 0;
-			safe_strncpy(source_x,source_p,CROSS_LEN);
+			safe_strcpy(source_x, source_p);
 			bool has_drive_spec = false;
 			size_t source_x_len = strlen(source_x);
 			if (source_x_len>0) {
@@ -874,12 +1052,12 @@ void DOS_Shell::CMD_COPY(char * args) {
 			dta.GetResult(name,size,date,time,attr);
 
 			if ((attr & DOS_ATTR_DIRECTORY) == 0) {
-				strcpy(nameSource,pathSource);
+				safe_strcpy(nameSource, pathSource);
 				strcat(nameSource,name);
 				// Open Source
 				if (DOS_OpenFile(nameSource,0,&sourceHandle)) {
 					// Create Target or open it if in concat mode
-					strcpy(nameTarget,pathTarget);
+					safe_strcpy(nameTarget, pathTarget);
 					if (nameTarget[strlen(nameTarget) - 1] == '\\') strcat(nameTarget,name);
 
 					//Special variable to ensure that copy * a_file, where a_file is not a directory concats.
@@ -894,14 +1072,21 @@ void DOS_Shell::CMD_COPY(char * args) {
 					        	                  DOS_SeekFile(targetHandle,&dummy,DOS_SEEK_END))) {
 							// Copy
 							static Bit8u buffer[0x8000]; // static, otherwise stack overflow possible.
-							bool	failed = false;
-							Bit16u	toread = 0x8000;
+							uint16_t toread = 0x8000;
 							do {
-								failed |= DOS_ReadFile(sourceHandle,buffer,&toread);
-								failed |= DOS_WriteFile(targetHandle,buffer,&toread);
+								DOS_ReadFile(sourceHandle, buffer, &toread);
+								DOS_WriteFile(targetHandle, buffer, &toread);
 							} while (toread == 0x8000);
-							failed |= DOS_CloseFile(sourceHandle);
-							failed |= DOS_CloseFile(targetHandle);
+							if (!oldsource.concat) {
+								DOS_GetFileDate(sourceHandle,
+								                &time,
+								                &date);
+								DOS_SetFileDate(targetHandle,
+								                time,
+								                date);
+							}
+							DOS_CloseFile(sourceHandle);
+							DOS_CloseFile(targetHandle);
 							WriteOut(" %s\n",name);
 							if (!source.concat && !special) count++; //Only count concat files once
 						} else {
@@ -961,8 +1146,14 @@ void DOS_Shell::CMD_SET(char * args) {
 				std::string temp;
 				if (GetEnvStr(p,temp)) {
 					std::string::size_type equals = temp.find('=');
-					if (equals == std::string::npos) continue;
-					strcpy(p_parsed,temp.substr(equals+1).c_str());
+					if (equals == std::string::npos)
+						continue;
+					const uintptr_t remaining_len = std::min(
+					        sizeof(parsed) - static_cast<uintptr_t>(p_parsed - parsed),
+					        sizeof(parsed));
+					safe_strncpy(p_parsed,
+					             temp.substr(equals + 1).c_str(),
+					             remaining_len);
 					p_parsed += strlen(p_parsed);
 				}
 				p = second;
@@ -1140,18 +1331,15 @@ void DOS_Shell::CMD_CALL(char * args){
 
 void DOS_Shell::CMD_DATE(char * args) {
 	HELP("DATE");
-	if (ScanCMDBool(args,"H")) {
-		// synchronize date with host parameter
-		time_t curtime;
-		struct tm *loctime;
-		curtime = time (NULL);
-		loctime = localtime (&curtime);
-
-		reg_cx = loctime->tm_year+1900;
-		reg_dh = loctime->tm_mon+1;
-		reg_dl = loctime->tm_mday;
-
-		reg_ah=0x2b; // set system date
+	if (ScanCMDBool(args, "H")) {
+		// synchronize date with host
+		const time_t curtime = time(nullptr);
+		struct tm datetime;
+		cross::localtime_r(&curtime, &datetime);
+		reg_ah = 0x2b; // set system date
+		reg_cx = static_cast<uint16_t>(datetime.tm_year + 1900);
+		reg_dh = static_cast<uint8_t>(datetime.tm_mon + 1);
+		reg_dl = static_cast<uint8_t>(datetime.tm_mday);
 		CALLBACK_RunRealInt(0x21);
 		return;
 	}
@@ -1197,28 +1385,31 @@ void DOS_Shell::CMD_DATE(char * args) {
 	}
 	WriteOut("%s %s\n",day, buffer);
 	if (!dateonly) WriteOut(MSG_Get("SHELL_CMD_DATE_SETHLP"));
-};
+}
 
 void DOS_Shell::CMD_TIME(char * args) {
 	HELP("TIME");
-	if (ScanCMDBool(args,"H")) {
-		// synchronize time with host parameter
-		time_t curtime;
-		struct tm *loctime;
-		curtime = time (NULL);
-		loctime = localtime (&curtime);
+	if (ScanCMDBool(args, "H")) {
+		// synchronize time with host
+		const time_t curtime = time(NULL);
+		struct tm datetime;
+		cross::localtime_r(&curtime, &datetime);
 
-		//reg_cx = loctime->;
-		//reg_dh = loctime->;
-		//reg_dl = loctime->;
-
-		// reg_ah=0x2d; // set system time TODO
-		// CALLBACK_RunRealInt(0x21);
-
-		Bit32u ticks=(Bit32u)(((double)(loctime->tm_hour*3600+
-										loctime->tm_min*60+
-										loctime->tm_sec))*18.206481481);
-		mem_writed(BIOS_TIMER,ticks);
+		// Original IBM PC used ~1.19MHz crystal for timer, because at
+		// 1.19MHz, 2^16 ticks is ~1 hour, making it easy to count
+		// hours and days. More precisely:
+		//
+		// clock updates at 1193180/65536 ticks per second.
+		// ticks per second ≈ 18.2
+		// ticks per hour   ≈ 65543
+		// ticks per day    ≈ 1573040
+		//
+		constexpr uint64_t ticks_per_day = 1573040;
+		const auto seconds_now = (datetime.tm_hour * 3600 +
+		                          datetime.tm_min * 60 +
+		                          datetime.tm_sec);
+		const auto ticks_now = ticks_per_day * seconds_now / (24 * 3600);
+		mem_writed(BIOS_TIMER, static_cast<uint32_t>(ticks_now));
 		return;
 	}
 	bool timeonly = ScanCMDBool(args,"T");
@@ -1237,7 +1428,7 @@ void DOS_Shell::CMD_TIME(char * args) {
 		WriteOut(MSG_Get("SHELL_CMD_TIME_NOW"));
 		WriteOut("%2u:%02u:%02u,%02u\n",reg_ch,reg_cl,reg_dh,reg_dl);
 	}
-};
+}
 
 void DOS_Shell::CMD_SUBST (char * args) {
 /* If more that one type can be substed think of something else
@@ -1248,7 +1439,7 @@ void DOS_Shell::CMD_SUBST (char * args) {
 	char mountstring[DOS_PATHLENGTH+CROSS_LEN+20];
 	char temp_str[2] = { 0,0 };
 	try {
-		strcpy(mountstring,"MOUNT ");
+		safe_strcpy(mountstring, "MOUNT ");
 		StripSpaces(args);
 		std::string arg;
 		CommandLine command(0,args);
@@ -1259,23 +1450,26 @@ void DOS_Shell::CMD_SUBST (char * args) {
 		if ( (arg.size() > 1) && arg[1] !=':')  throw(0);
 		temp_str[0]=(char)toupper(args[0]);
 		command.FindCommand(2,arg);
+		const auto drive_idx = drive_index(temp_str[0]);
 		if ((arg == "/D") || (arg == "/d")) {
-			if (!Drives[temp_str[0]-'A'] ) throw 1; //targetdrive not in use
-			strcat(mountstring,"-u ");
-			strcat(mountstring,temp_str);
+			if (!Drives[drive_idx])
+				throw 1; // targetdrive not in use
+			strcat(mountstring, "-u ");
+			strcat(mountstring, temp_str);
 			this->ParseLine(mountstring);
 			return;
 		}
-		if (Drives[temp_str[0]-'A'] ) throw 0; //targetdrive in use
-		strcat(mountstring,temp_str);
-		strcat(mountstring," ");
+		if (Drives[drive_idx])
+			throw 0; // targetdrive in use
+		strcat(mountstring, temp_str);
+		strcat(mountstring, " ");
 
    		Bit8u drive;char fulldir[DOS_PATHLENGTH];
 		if (!DOS_MakeName(const_cast<char*>(arg.c_str()),fulldir,&drive)) throw 0;
 
 		if ( ( ldp=dynamic_cast<localDrive*>(Drives[drive])) == 0 ) throw 0;
 		char newname[CROSS_LEN];
-		strcpy(newname, ldp->getBasedir());
+		safe_strcpy(newname, ldp->GetBasedir());
 		strcat(newname,fulldir);
 		CROSS_FILENAME(newname);
 		ldp->dirCache.ExpandName(newname);
@@ -1369,9 +1563,11 @@ void DOS_Shell::CMD_CHOICE(char * args){
 
 	Bit16u n=1;
 	do {
-		DOS_ReadFile (STDIN,&c,&n);
-	} while (!c || !(ptr = strchr(rem,(optS?c:toupper(c)))));
-	c = optS?c:(Bit8u)toupper(c);
+		DOS_ReadFile(STDIN, &c, &n);
+		if (exit_requested)
+			break;
+	} while (!c || !(ptr = strchr(rem, (optS ? c : toupper(c)))));
+	c = optS ? c : (Bit8u)toupper(c);
 	DOS_WriteFile(STDOUT, &c, &n);
 	WriteOut_NoParsing("\n");
 	dos.return_code = (Bit8u)(ptr-rem+1);
@@ -1400,22 +1596,22 @@ void DOS_Shell::CMD_PATH(char *args){
 	}
 }
 
-void DOS_Shell::CMD_VER(char *args) {
+void DOS_Shell::CMD_VER(char *args)
+{
 	HELP("VER");
 	if (args && strlen(args)) {
-		char* word = StripWord(args);
-		if (strcasecmp(word,"set")) return;
+		char *word = StripWord(args);
+		if (strcasecmp(word, "set"))
+			return;
 		word = StripWord(args);
-		if (!*args && !*word) { //Reset
-			dos.version.major = 5;
-			dos.version.minor = 0;
-		} else if (*args == 0 && *word && (strchr(word,'.') != 0)) { //Allow: ver set 5.1
-			const char * p = strchr(word,'.');
-			dos.version.major = (Bit8u)(atoi(word));
-			dos.version.minor = (Bit8u)(atoi(p+1));
-		} else { //Official syntax: ver set 5 2
-			dos.version.major = (Bit8u)(atoi(word));
-			dos.version.minor = (Bit8u)(atoi(args));
-		}
-	} else WriteOut(MSG_Get("SHELL_CMD_VER_VER"),VERSION,dos.version.major,dos.version.minor);
+		const auto new_version = DOS_ParseVersion(word, args);
+		if (new_version.major || new_version.minor) {
+			dos.version.major = new_version.major;
+			dos.version.minor = new_version.minor;
+		} else
+			WriteOut(MSG_Get("SHELL_CMD_VER_INVALID"));
+	} else {
+		WriteOut(MSG_Get("SHELL_CMD_VER_VER"), DOSBOX_GetDetailedVersion(),
+		         dos.version.major, dos.version.minor);
+	}
 }

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,13 +16,10 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_VGA_H
 #define DOSBOX_VGA_H
 
-#ifndef DOSBOX_DOSBOX_H
 #include "dosbox.h"
-#endif
 
 //Don't enable keeping changes and mapping lfb probably...
 #define VGA_LFB_MAPPED
@@ -416,6 +413,8 @@ void Herc_Palette(void);
 /* CGA Mono Palette function */
 void Mono_CGA_Palette(void);
 
+void VGA_SetMonoPalette(const char *colour);
+
 /* Functions for different resolutions */
 void VGA_SetMode(VGAModes mode);
 void VGA_DetermineMode(void);
@@ -530,6 +529,5 @@ extern Bit32u TXT_FG_Table[16];
 extern Bit32u TXT_BG_Table[16];
 extern Bit32u Expand16Table[4][16];
 extern Bit32u Expand16BigTable[0x10000];
-
 
 #endif

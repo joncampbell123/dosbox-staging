@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,12 +16,13 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #include "dosbox.h"
+
 #include "bios.h"
 #include "bios_disk.h"
 #include "setup.h"
 #include "support.h"
+#include "string_utils.h"
 #include "../ints/int10.h"
 #include "regs.h"
 #include "callback.h"
@@ -58,15 +59,24 @@ static FILE* OpenDosboxFile(const char* name) {
 	return tmpfile;
 }
 
-
 class keyboard_layout {
 public:
-	keyboard_layout() {
+	keyboard_layout()
+	        : additional_planes(0),
+	          used_lock_modifiers(0x0f),
+	          diacritics_entries(0),
+	          diacritics_character(0),
+	          user_keys(0),
+	          use_foreign_layout(false),
+	          language_codes(nullptr),
+	          language_code_count(0)
+	{
 		this->reset();
-		language_codes=NULL;
-		use_foreign_layout=false;
 		sprintf(current_keyboard_file_name, "none");
-	};
+	}
+
+	keyboard_layout(const keyboard_layout &) = delete; // prevent copying
+	keyboard_layout &operator=(const keyboard_layout &) = delete; // prevent assignment
 
 	~keyboard_layout();
 
@@ -112,7 +122,6 @@ private:
 	Bitu read_keyboard_file(const char* keyboard_file_name, Bit32s specific_layout, Bit32s requested_codepage);
 	bool map_key(Bitu key, Bit16u layouted_key, bool is_command, bool is_keypair);
 };
-
 
 keyboard_layout::~keyboard_layout() {
 	if (language_codes) {
@@ -259,7 +268,8 @@ static Bit32u read_kcl_data(Bit8u * kcl_data, Bit32u kcl_data_size, const char* 
 Bitu keyboard_layout::read_keyboard_file(const char* keyboard_file_name, Bit32s specific_layout, Bit32s requested_codepage) {
 	this->reset();
 
-	if (specific_layout==-1) strcpy(current_keyboard_file_name, keyboard_file_name);
+	if (specific_layout == -1)
+		safe_strcpy(current_keyboard_file_name, keyboard_file_name);
 	if (!strcmp(keyboard_file_name,"none")) return KEYB_NOERROR;
 
 	static Bit8u read_buf[65535];
@@ -359,7 +369,7 @@ Bitu keyboard_layout::read_keyboard_file(const char* keyboard_file_name, Bit32s 
 	for (Bit16u cplane=0; cplane<additional_planes; cplane++) {
 		Bit16u plane_flags;
 
-		// get required-flags (shift/alt/ctrl-states etc.)
+		// get required-flags (Shift/Alt/Ctrl states, etc.)
 		plane_flags=host_readw(&read_buf[read_buf_pos]);
 		read_buf_pos+=2;
 		current_layout_planes[cplane].required_flags=plane_flags;
@@ -701,7 +711,7 @@ Bit16u keyboard_layout::extract_codepage(const char* keyboard_file_name) {
 
 Bitu keyboard_layout::read_codepage_file(const char* codepage_file_name, Bit32s codepage_id) {
 	char cp_filename[512];
-	strcpy(cp_filename, codepage_file_name);
+	safe_strcpy(cp_filename, codepage_file_name);
 	if (!strcmp(cp_filename,"none")) return KEYB_NOERROR;
 
 	if (codepage_id==dos.loaded_codepage) return KEYB_NOERROR;
@@ -896,9 +906,8 @@ Bitu keyboard_layout::read_codepage_file(const char* codepage_file_name, Bit32s 
 		if ((device_type==0x0001) && (font_type==0x0001) && (font_codepage==codepage_id)) {
 			// valid/matching codepage found
 
-			Bit16u number_of_fonts,font_data_length;
-			number_of_fonts=host_readw(&cpi_buf[font_data_header_pt+0x02]);
-			font_data_length=host_readw(&cpi_buf[font_data_header_pt+0x04]);
+			const uint16_t number_of_fonts = host_readw(&cpi_buf[font_data_header_pt + 0x02]);
+			// const uint16_t font_data_length = host_readw(&cpi_buf[font_data_header_pt + 0x04]);
 
 			bool font_changed=false;
 			Bit32u font_data_start=font_data_header_pt+0x06;
@@ -967,7 +976,7 @@ Bitu keyboard_layout::switch_keyboard_layout(const char* new_layout, keyboard_la
 	if (strncasecmp(new_layout,"US",2)) {
 		// switch to a foreign layout
 		char tbuf[256];
-		strcpy(tbuf, new_layout);
+		safe_strcpy(tbuf, new_layout);
 		size_t newlen=strlen(tbuf);
 
 		bool language_code_found=false;
@@ -1040,12 +1049,14 @@ const char* keyboard_layout::main_language_code() {
 
 static keyboard_layout* loaded_layout=NULL;
 
-// CTRL-ALT-F2 switches between foreign and US-layout using this function
-/* static void switch_keyboard_layout(bool pressed) {
+#if 0
+// Ctrl+Alt+F2 switches between foreign and US-layout using this function
+static void switch_keyboard_layout(bool pressed) {
 	if (!pressed)
 		return;
 	if (loaded_layout) loaded_layout->switch_foreign_layout();
-} */
+}
+#endif
 
 // called by int9-handler
 bool DOS_LayoutKey(Bitu key, Bit8u flags1, Bit8u flags2, Bit8u flags3) {
@@ -1300,5 +1311,6 @@ void DOS_KeyboardLayout_ShutDown(Section* /*sec*/) {
 void DOS_KeyboardLayout_Init(Section* sec) {
 	test = new DOS_KeyboardLayout(sec);
 	sec->AddDestroyFunction(&DOS_KeyboardLayout_ShutDown,true);
-//	MAPPER_AddHandler(switch_keyboard_layout,MK_f2,MMOD1|MMOD2,"sw_layout","Switch Layout");
+	// MAPPER_AddHandler(switch_keyboard_layout, SDL_SCANCODE_F2,
+	//                   MMOD1 | MMOD2, "sw_layout", "Switch Layout");
 }

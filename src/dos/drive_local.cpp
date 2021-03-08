@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,23 +24,33 @@
 
 #include "drives.h"
 
+#include <cerrno>
+#include <climits>
 #include <cstdio>
+#include <ctime>
+#include <limits>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <errno.h>
+#include <sys/types.h>
+
+#ifdef _MSC_VER
+#include <sys/utime.h>
+#else
+#include <utime.h>
+#endif
 
 #include "dos_inc.h"
 #include "dos_mscdex.h"
-#include "support.h"
+#include "fs_utils.h"
+#include "string_utils.h"
 #include "cross.h"
 #include "inout.h"
 
 bool localDrive::FileCreate(DOS_File * * file,char * name,Bit16u /*attributes*/) {
 //TODO Maybe care for attributes but not likely
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	char* temp_name = dirCache.GetExpandName(newname); //Can only be used in till a new drive_cache action is preformed */
 	/* Test if file exists (so we need to truncate it). don't add to dirCache then */
@@ -58,7 +71,7 @@ bool localDrive::FileCreate(DOS_File * * file,char * name,Bit16u /*attributes*/)
    
 	if (!existing_file) dirCache.AddEntry(newname, true);
 	/* Make the 16 bit device information */
-	*file=new localFile(name,hand);
+	*file = new localFile(name, hand, basedir);
 	(*file)->flags=OPEN_READWRITE;
 
 	return true;
@@ -70,8 +83,35 @@ bool localDrive::IsFirstEncounter(const std::string& filename) {
 	return was_inserted;
 }
 
-bool localDrive::FileOpen(DOS_File** file, char * name, Bit32u flags) {
-	const char* type = nullptr;
+// Search the Files[] inventory for an open file matching the requested
+// local drive and file name. Returns nullptr if not found.
+DOS_File *FindOpenFile(const DOS_Drive *drive, const char *name)
+{
+	if (!drive || !name)
+		return nullptr;
+
+	uint8_t drive_num = DOS_DRIVES; // default out range
+	// Look for a matching drive mount
+	for (uint8_t i = 0; i < DOS_DRIVES; ++i) {
+		if (Drives[i] && Drives[i] == drive) {
+			drive_num = i;
+			break;
+		}
+	}
+	if (drive_num == DOS_DRIVES) // still out of range, no matching mount
+		return nullptr;
+
+	// Look for a matching open filename on the same mount
+	for (auto *file : Files)
+		if (file && file->IsOpen() && file->GetDrive() == drive_num && file->IsName(name))
+			return file; // drive + file path is unique
+
+	return nullptr;
+}
+
+bool localDrive::FileOpen(DOS_File **file, char *name, Bit32u flags)
+{
+	const char *type = nullptr;
 	switch (flags&0xf) {
 	case OPEN_READ:        type = "rb" ; break;
 	case OPEN_WRITE:       type = "rb+"; break;
@@ -82,26 +122,16 @@ bool localDrive::FileOpen(DOS_File** file, char * name, Bit32u flags) {
 		return false;
 	}
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	dirCache.ExpandName(newname);
 
-	//Flush the buffer of handles for the same file. (Betrayal in Antara)
-	Bit8u i,drive=DOS_DRIVES;
-	localFile *lfp = nullptr;
-	for (i = 0; i < DOS_DRIVES; i++) {
-		if (Drives[i] == this) {
-			drive = i;
-			break;
-		}
-	}
-	for (i = 0; i < DOS_FILES; i++) {
-		if (Files[i] && Files[i]->IsOpen() && Files[i]->GetDrive()==drive && Files[i]->IsName(name)) {
-			lfp=dynamic_cast<localFile*>(Files[i]);
-			if (lfp) lfp->Flush();
-		}
-	}
+	// If the file's already open then flush it before continuing
+	// (Betrayal in Antara)
+	auto open_file = dynamic_cast<localFile *>(FindOpenFile(this, name));
+	if (open_file)
+		open_file->Flush();
 
 	FILE* fhandle = fopen(newname, type);
 
@@ -117,7 +147,7 @@ bool localDrive::FileOpen(DOS_File** file, char * name, Bit32u flags) {
 	}
 #endif
 
-	// If we couldn't open the file, then it's possibile that
+	// If we couldn't open the file, then it's possible that
 	// the file is simply write-protected and the flags requested
 	// RW access.  So check if this is the case:
 	if (!fhandle && flags & (OPEN_READWRITE | OPEN_WRITE)) {
@@ -160,7 +190,7 @@ bool localDrive::FileOpen(DOS_File** file, char * name, Bit32u flags) {
 #endif
 
 	if (fhandle) {
-		*file = new localFile(name, fhandle);
+		*file = new localFile(name, fhandle, basedir);
 		(*file)->flags = flags;  // for the inheritance flag and maybe check for others.
 	} else {
 		// Otherwise we really can't open the file.
@@ -172,8 +202,8 @@ bool localDrive::FileOpen(DOS_File** file, char * name, Bit32u flags) {
 FILE * localDrive::GetSystemFilePtr(char const * const name, char const * const type) {
 
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	dirCache.ExpandName(newname);
 
@@ -189,51 +219,53 @@ bool localDrive::GetSystemFilename(char *sysName, char const * const dosName) {
 	return true;
 }
 
+// Attempt to delete the file name from our local drive mount
 bool localDrive::FileUnlink(char * name) {
-	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
-	CROSS_FILENAME(newname);
-	char *fullname = dirCache.GetExpandName(newname);
-	if (unlink(fullname)) {
-		//Unlink failed for some reason try finding it.
-		struct stat buffer;
-		if (stat(fullname,&buffer)) return false; // File not found.
-
-		FILE* file_writable = fopen_wrap(fullname,"rb+");
-		if (!file_writable) return false; //No acces ? ERROR MESSAGE NOT SET. FIXME ?
-		fclose(file_writable);
-
-		//File exists and can technically be deleted, nevertheless it failed.
-		//This means that the file is probably open by some process.
-		//See if We have it open.
-		bool found_file = false;
-		for (Bitu i = 0;i < DOS_FILES;i++) {
-			if (Files[i] && Files[i]->IsName(name)) {
-				Bitu max = DOS_FILES;
-				while (Files[i]->IsOpen() && max--) {
-					Files[i]->Close();
-					if (Files[i]->RemoveRef()<=0) break;
-				}
-				found_file=true;
-			}
-		}
-		if (!found_file) return false;
-		if (!unlink(fullname)) {
-			dirCache.DeleteEntry(newname);
-			return true;
-		}
+	if (!FileExists(name)) {
+		DEBUG_LOG_MSG("FS: Skipping removal of %s because it doesn't exist",
+		              name);
+		DOS_SetError(DOSERR_FILE_NOT_FOUND);
 		return false;
-	} else {
+	}
+
+	char newname[CROSS_LEN];
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
+	CROSS_FILENAME(newname);
+	const char *fullname = dirCache.GetExpandName(newname);
+
+	// Can we remove the file without issue?
+	if (remove(fullname) == 0) {
 		dirCache.DeleteEntry(newname);
 		return true;
 	}
+
+	// Otherwise maybe the file's opened within our mount ...
+	DOS_File *open_file = FindOpenFile(this, name);
+	if (open_file) {
+		size_t max = DOS_FILES;
+		// then close and remove references (as many times as needed),
+		while (open_file->IsOpen() && --max) {
+			open_file->Close();
+			if (open_file->RemoveRef() <= 0) {
+				break;
+			}
+		}
+		// and try removing it again.
+		if (remove(fullname) == 0) {
+			dirCache.DeleteEntry(newname);
+			return true;
+		}
+	}
+	DEBUG_LOG_MSG("FS: Unable to remove file %s", fullname);
+	DOS_SetError(DOSERR_ACCESS_DENIED);
+	return false;
 }
 
 bool localDrive::FindFirst(char * _dir,DOS_DTA & dta,bool fcb_findfirst) {
 	char tempDir[CROSS_LEN];
-	strcpy(tempDir,basedir);
-	strcat(tempDir,_dir);
+	safe_strcpy(tempDir, basedir);
+	safe_strcat(tempDir, _dir);
 	CROSS_FILENAME(tempDir);
 
 	if (allocation.mediaid==0xF0) {
@@ -241,14 +273,15 @@ bool localDrive::FindFirst(char * _dir,DOS_DTA & dta,bool fcb_findfirst) {
 	}
     
 	char end[2]={CROSS_FILESPLIT,0};
-	if (tempDir[strlen(tempDir)-1]!=CROSS_FILESPLIT) strcat(tempDir,end);
-	
+	if (tempDir[strlen(tempDir) - 1] != CROSS_FILESPLIT)
+		safe_strcat(tempDir, end);
+
 	Bit16u id;
 	if (!dirCache.FindFirst(tempDir,id)) {
 		DOS_SetError(DOSERR_PATH_NOT_FOUND);
 		return false;
 	}
-	strcpy(srchInfo[id].srch_dir,tempDir);
+	safe_strcpy(srchInfo[id].srch_dir, tempDir);
 	dta.SetDirID(id);
 	
 	Bit8u sAttr;
@@ -262,7 +295,7 @@ bool localDrive::FindFirst(char * _dir,DOS_DTA & dta,bool fcb_findfirst) {
 		}
 	} else {
 		if (sAttr == DOS_ATTR_VOLUME) {
-			if (strlen(dirCache.GetLabel()) == 0) {
+			if (is_empty(dirCache.GetLabel())) {
 //				LOG(LOG_DOSMISC,LOG_ERROR)("DRIVELABEL REQUESTED: none present, returned  NOLABEL");
 //				dta.SetResult("NO_LABEL",0,0,0,DOS_ATTR_VOLUME);
 //				return true;
@@ -303,13 +336,13 @@ again:
 	}
 	if (!WildFileCmp(dir_ent,srch_pattern)) goto again;
 
-	strcpy(full_name,srchInfo[id].srch_dir);
-	strcat(full_name,dir_ent);
-	
+	safe_strcpy(full_name, srchInfo[id].srch_dir);
+	safe_strcat(full_name, dir_ent);
+
 	//GetExpandName might indirectly destroy dir_ent (by caching in a new directory 
 	//and due to its design dir_ent might be lost.)
 	//Copying dir_ent first
-	strcpy(dir_entcopy,dir_ent);
+	safe_strcpy(dir_entcopy, dir_ent);
 	if (stat(dirCache.GetExpandName(full_name),&stat_block)!=0) { 
 		goto again;//No symlinks and such
 	}	
@@ -319,18 +352,21 @@ again:
  	if (~srch_attr & find_attr & (DOS_ATTR_DIRECTORY | DOS_ATTR_HIDDEN | DOS_ATTR_SYSTEM)) goto again;
 	
 	/*file is okay, setup everything to be copied in DTA Block */
-	char find_name[DOS_NAMELENGTH_ASCII];Bit16u find_date,find_time;Bit32u find_size;
+	char find_name[DOS_NAMELENGTH_ASCII] = "";
+	uint16_t find_date;
+	uint16_t find_time;
+	uint32_t find_size;
 
 	if (strlen(dir_entcopy)<DOS_NAMELENGTH_ASCII) {
-		strcpy(find_name,dir_entcopy);
+		safe_strcpy(find_name, dir_entcopy);
 		upcase(find_name);
 	} 
 
 	find_size=(Bit32u) stat_block.st_size;
-	struct tm *time;
-	if ((time=localtime(&stat_block.st_mtime))!=0) {
-		find_date=DOS_PackDate((Bit16u)(time->tm_year+1900),(Bit16u)(time->tm_mon+1),(Bit16u)time->tm_mday);
-		find_time=DOS_PackTime((Bit16u)time->tm_hour,(Bit16u)time->tm_min,(Bit16u)time->tm_sec);
+	struct tm datetime;
+	if (cross::localtime_r(&stat_block.st_mtime, &datetime)) {
+		find_date = DOS_PackDate(datetime);
+		find_time = DOS_PackTime(datetime);
 	} else {
 		find_time=6; 
 		find_date=4;
@@ -341,8 +377,8 @@ again:
 
 bool localDrive::GetFileAttr(char * name,Bit16u * attr) {
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	dirCache.ExpandName(newname);
 
@@ -358,23 +394,19 @@ bool localDrive::GetFileAttr(char * name,Bit16u * attr) {
 
 bool localDrive::MakeDir(char * dir) {
 	char newdir[CROSS_LEN];
-	strcpy(newdir,basedir);
-	strcat(newdir,dir);
+	safe_strcpy(newdir, basedir);
+	safe_strcat(newdir, dir);
 	CROSS_FILENAME(newdir);
-#if defined (WIN32)						/* MS Visual C++ */
-	int temp=mkdir(dirCache.GetExpandName(newdir));
-#else
-	int temp=mkdir(dirCache.GetExpandName(newdir),0700);
-#endif
-	if (temp==0) dirCache.CacheOut(newdir,true);
-
+	const int temp = create_dir(dirCache.GetExpandName(newdir), 0775);
+	if (temp == 0)
+		dirCache.CacheOut(newdir, true);
 	return (temp==0);// || ((temp!=0) && (errno==EEXIST));
 }
 
 bool localDrive::RemoveDir(char * dir) {
 	char newdir[CROSS_LEN];
-	strcpy(newdir,basedir);
-	strcat(newdir,dir);
+	safe_strcpy(newdir, basedir);
+	safe_strcat(newdir, dir);
 	CROSS_FILENAME(newdir);
 	int temp=rmdir(dirCache.GetExpandName(newdir));
 	if (temp==0) dirCache.DeleteEntry(newdir,true);
@@ -383,8 +415,8 @@ bool localDrive::RemoveDir(char * dir) {
 
 bool localDrive::TestDir(char * dir) {
 	char newdir[CROSS_LEN];
-	strcpy(newdir,basedir);
-	strcat(newdir,dir);
+	safe_strcpy(newdir, basedir);
+	safe_strcat(newdir, dir);
 	CROSS_FILENAME(newdir);
 	dirCache.ExpandName(newdir);
 	// Skip directory test, if "\"
@@ -395,20 +427,19 @@ bool localDrive::TestDir(char * dir) {
 		if (stat(newdir,&test))			return false;
 		if ((test.st_mode & S_IFDIR)==0)	return false;
 	};
-	int temp=access(newdir,F_OK);
-	return (temp==0);
+	return path_exists(newdir);
 }
 
 bool localDrive::Rename(char * oldname,char * newname) {
 	char newold[CROSS_LEN];
-	strcpy(newold,basedir);
-	strcat(newold,oldname);
+	safe_strcpy(newold, basedir);
+	safe_strcat(newold, oldname);
 	CROSS_FILENAME(newold);
 	dirCache.ExpandName(newold);
 	
 	char newnew[CROSS_LEN];
-	strcpy(newnew,basedir);
-	strcat(newnew,newname);
+	safe_strcpy(newnew, basedir);
+	safe_strcat(newnew, newname);
 	CROSS_FILENAME(newnew);
 	int temp=rename(newold,dirCache.GetExpandName(newnew));
 	if (temp==0) dirCache.CacheOut(newnew);
@@ -426,8 +457,8 @@ bool localDrive::AllocationInfo(Bit16u * _bytes_sector,Bit8u * _sectors_cluster,
 
 bool localDrive::FileExists(const char* name) {
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	dirCache.ExpandName(newname);
 	struct stat temp_stat;
@@ -438,19 +469,19 @@ bool localDrive::FileExists(const char* name) {
 
 bool localDrive::FileStat(const char* name, FileStat_Block * const stat_block) {
 	char newname[CROSS_LEN];
-	strcpy(newname,basedir);
-	strcat(newname,name);
+	safe_strcpy(newname, basedir);
+	safe_strcat(newname, name);
 	CROSS_FILENAME(newname);
 	dirCache.ExpandName(newname);
 	struct stat temp_stat;
 	if (stat(newname,&temp_stat)!=0) return false;
 	/* Convert the stat to a FileStat */
-	struct tm *time;
-	if ((time=localtime(&temp_stat.st_mtime))!=0) {
-		stat_block->time=DOS_PackTime((Bit16u)time->tm_hour,(Bit16u)time->tm_min,(Bit16u)time->tm_sec);
-		stat_block->date=DOS_PackDate((Bit16u)(time->tm_year+1900),(Bit16u)(time->tm_mon+1),(Bit16u)time->tm_mday);
+	struct tm datetime;
+	if (cross::localtime_r(&temp_stat.st_mtime, &datetime)) {
+		stat_block->time = DOS_PackTime(datetime);
+		stat_block->date = DOS_PackDate(datetime);
 	} else {
-
+		LOG_MSG("FS: error while converting date in: %s", name);
 	}
 	stat_block->size=(Bit32u)temp_stat.st_size;
 	return true;
@@ -487,46 +518,123 @@ localDrive::localDrive(const char * startdir,
 	             _free_clusters,
 	             _mediaid}
 {
-	strcpy(basedir, startdir);
+	safe_strcpy(basedir, startdir);
 	sprintf(info,"local directory %s",startdir);
 	dirCache.SetBaseDir(basedir);
 }
 
+// Updates the internal file's current position
+bool localFile::ftell_and_check()
+{
+	if (!fhandle)
+		return false;
+
+	stream_pos = ftell(fhandle);
+	if (stream_pos >= 0)
+		return true;
+
+	DEBUG_LOG_MSG("FS: Failed obtaining position in file %s", name.c_str());
+	return false;
+}
+
+// Seeks the internal file to the specified position relative to whence
+bool localFile::fseek_to_and_check(long pos, int whence)
+{
+	if (!fhandle)
+		return false;
+
+	if (fseek(fhandle, pos, whence) == 0) {
+		stream_pos = pos;
+		return true;
+	}
+	DEBUG_LOG_MSG("FS: Failed seeking to byte %ld in file %s", stream_pos, name.c_str());
+	return false;
+}
+
+// Seeks the internal file to the internal position relative to whence
+void localFile::fseek_and_check(int whence)
+{
+	static_cast<void>(fseek_to_and_check(stream_pos, whence));
+}
 
 //TODO Maybe use fflush, but that seemed to fuck up in visual c
-bool localFile::Read(Bit8u * data,Bit16u * size) {
-	if ((this->flags & 0xf) == OPEN_WRITE) {	// check if file opened in write-only mode
+bool localFile::Read(uint8_t *data, uint16_t *size)
+{
+	// check if the file is opened in write-only mode
+	if ((this->flags & 0xf) == OPEN_WRITE) {
 		DOS_SetError(DOSERR_ACCESS_DENIED);
 		return false;
 	}
-	if (last_action==WRITE) fseek(fhandle,ftell(fhandle),SEEK_SET);
-	last_action=READ;
-	*size=(Bit16u)fread(data,1,*size,fhandle);
+
+	// Seek if we last wrote
+	if (last_action == WRITE)
+		if (ftell_and_check())
+			fseek_and_check(SEEK_SET);
+
+	last_action = READ;
+	const auto requested = *size;
+	const auto actual = static_cast<uint16_t>(fread(data, 1, requested, fhandle));
+	*size = actual; // always save the actual
+
+	// if (actual != requested)
+	//	DEBUG_LOG_MSG("FS: Only read %u of %u requested bytes from file %s",
+	//	              actual, requested, name.c_str());
+
 	/* Fake harddrive motion. Inspector Gadget with soundblaster compatible */
 	/* Same for Igor */
-	/* hardrive motion => unmask irq 2. Only do it when it's masked as unmasking is realitively heavy to emulate */
+	/* hardrive motion => unmask irq 2. Only do it when it's masked as
+	 * unmasking is realitively heavy to emulate */
 	Bit8u mask = IO_Read(0x21);
-	if (mask & 0x4) IO_Write(0x21,mask&0xfb);
+	if (mask & 0x4)
+		IO_Write(0x21, mask & 0xfb);
 	return true;
 }
 
-bool localFile::Write(Bit8u * data,Bit16u * size) {
+bool localFile::Write(uint8_t *data, uint16_t *size)
+{
 	Bit32u lastflags = this->flags & 0xf;
 	if (lastflags == OPEN_READ || lastflags == OPEN_READ_NO_MOD) {	// check if file opened in read-only mode
 		DOS_SetError(DOSERR_ACCESS_DENIED);
 		return false;
 	}
-	if (last_action==READ) fseek(fhandle,ftell(fhandle),SEEK_SET);
-	last_action=WRITE;
+
+	// Seek if we last read
+	if (last_action == READ)
+		if (ftell_and_check())
+			fseek_and_check(SEEK_SET);
+
+	last_action = WRITE;
+
+	// Truncate the file
 	if (*size == 0) {
-		return !ftruncate(cross_fileno(fhandle), ftell(fhandle));
-	} else {
-		*size = (Bit16u)fwrite(data, 1, *size, fhandle);
+		const auto file = cross_fileno(fhandle);
+		if (file == -1) {
+			DEBUG_LOG_MSG("FS: Could not resolve file number for %s", name.c_str());
+			return false;
+		}
+		if (!ftell_and_check()) {
+			return false;
+		}
+		if (ftruncate(file, stream_pos) != 0) {
+			DEBUG_LOG_MSG("FS: Failed truncating file %s", name.c_str());
+			return false;
+		}
+		// Truncation succeeded if we made it here
 		return true;
 	}
+
+	// Otherwise we have some data to write
+	const auto requested = *size;
+	const auto actual = static_cast<uint16_t>(fwrite(data, 1, requested, fhandle));
+	if (actual != requested)
+		DEBUG_LOG_MSG("FS: Only wrote %u of %u requested bytes to file %s",
+		              actual, requested, name.c_str());
+	*size = actual; // always save the actual
+	return true;    // always return true, even if partially written
 }
 
-bool localFile::Seek(Bit32u * pos,Bit32u type) {
+bool localFile::Seek(uint32_t *pos_addr, uint32_t type)
+{
 	int seektype;
 	switch (type) {
 	case DOS_SEEK_SET:seektype=SEEK_SET;break;
@@ -536,20 +644,35 @@ bool localFile::Seek(Bit32u * pos,Bit32u type) {
 	//TODO Give some doserrorcode;
 		return false;//ERROR
 	}
-	int ret=fseek(fhandle,*reinterpret_cast<Bit32s*>(pos),seektype);
-	if (ret!=0) {
-		// Out of file range, pretend everythings ok 
-		// and move file pointer top end of file... ?! (Black Thorne)
-		fseek(fhandle,0,SEEK_END);
-	};
+
+	// The inbound position is actually an int32_t being passed through a
+	// uint32_t* pointer (pos_addr), so reinterpret the underlying memory as
+	// such to prevent rollover into the unsigned range.
+	const auto pos = *reinterpret_cast<int32_t *>(pos_addr);
+	if (!fseek_to_and_check(pos, seektype)) {
+		// Failed to seek, but try again this time seeking to
+		// the end of file, which satisfies Black Thorne.
+		stream_pos = 0;
+		fseek_and_check(SEEK_END);
+	}
 #if 0
 	fpos_t temppos;
 	fgetpos(fhandle,&temppos);
 	Bit32u * fake_pos=(Bit32u*)&temppos;
-	*pos=*fake_pos;
+	*pos_addr = *fake_pos;
 #endif
-	*pos=(Bit32u)ftell(fhandle);
-	last_action=NONE;
+	static_cast<void>(ftell_and_check());
+
+	// The inbound position is actually an int32_t being passed through a
+	// uint32_t* pointer (pos_addr), so before we save the seeked position
+	// back into it we first ensure the current long stream_pos (which is a
+	// signed 64-bit on some platforms + OSes) can fit within the int32_t
+	// range before assigning it.
+	assert(stream_pos >= std::numeric_limits<int32_t>::min() &&
+	       stream_pos <= std::numeric_limits<int32_t>::max());
+	*reinterpret_cast<int32_t *>(pos_addr) = static_cast<int32_t>(stream_pos);
+
+	last_action = NONE;
 	return true;
 }
 
@@ -560,49 +683,94 @@ bool localFile::Close() {
 		fhandle = 0;
 		open = false;
 	};
+
+	if (newtime) {
+		// backport from DOS_PackDate() and DOS_PackTime()
+		struct tm tim = {};
+		tim.tm_sec = (time & 0x1f) * 2;
+		tim.tm_min = (time >> 5) & 0x3f;
+		tim.tm_hour = (time >> 11) & 0x1f;
+		tim.tm_mday = date & 0x1f;
+		tim.tm_mon = ((date >> 5) & 0x0f) - 1;
+		tim.tm_year = (date >> 9) + 1980 - 1900;
+		//  have the C run-time library code compute whether standard
+		//  time or daylight saving time is in effect.
+		tim.tm_isdst = -1;
+		// serialize time
+		mktime(&tim);
+
+		utimbuf ftim;
+		ftim.actime = ftim.modtime = mktime(&tim);
+
+		char fullname[CROSS_LEN];
+		snprintf(fullname, sizeof(fullname), "%s%s", basedir, name.c_str());
+		CROSS_FILENAME(fullname);
+
+		// FIXME: utime is deprecated, need a modern cross-platform
+		// implementation.
+		if (utime(fullname, &ftim)) {
+			return false;
+		}
+	}
+
 	return true;
 }
 
 Bit16u localFile::GetInformation(void) {
 	return read_only_medium?0x40:0;
 }
-	
 
-localFile::localFile(const char* _name, FILE * handle)
-	: fhandle(handle),
-	  read_only_medium(false),
-	  last_action(NONE)
+localFile::localFile(const char *_name, FILE *handle, const char *_basedir)
+        : fhandle(handle),
+          basedir(_basedir),
+          read_only_medium(false),
+          last_action(NONE)
 {
 	open=true;
 	UpdateDateTimeFromHost();
 
 	attr=DOS_ATTR_ARCHIVE;
 
-	name=0;
 	SetName(_name);
 }
 
-bool localFile::UpdateDateTimeFromHost(void) {
-	if (!open) return false;
+bool localFile::UpdateDateTimeFromHost()
+{
+	if (!open)
+		return false;
+
+	// Legal defaults if we're unable to populate them
+	time = 1;
+	date = 1;
+
+	const auto file = cross_fileno(fhandle);
+	if (file == -1)
+		return true; // use defaults
+
 	struct stat temp_stat;
-	fstat(cross_fileno(fhandle), &temp_stat);
-	struct tm * ltime;
-	if ((ltime=localtime(&temp_stat.st_mtime))!=0) {
-		time=DOS_PackTime((Bit16u)ltime->tm_hour,(Bit16u)ltime->tm_min,(Bit16u)ltime->tm_sec);
-		date=DOS_PackDate((Bit16u)(ltime->tm_year+1900),(Bit16u)(ltime->tm_mon+1),(Bit16u)ltime->tm_mday);
-	} else {
-		time=1;date=1;
-	}
+	if (fstat(file, &temp_stat) == -1)
+		return true; // use defaults
+
+	struct tm datetime;
+	if (!cross::localtime_r(&temp_stat.st_mtime, &datetime))
+		return true; // use defaults
+
+	time = DOS_PackTime(datetime);
+	date = DOS_PackDate(datetime);
 	return true;
 }
 
-void localFile::Flush(void) {
-	if (last_action==WRITE) {
-		fseek(fhandle,ftell(fhandle),SEEK_SET);
-		last_action=NONE;
-	}
-}
+void localFile::Flush()
+{
+	if (last_action != WRITE)
+		return;
 
+	if (ftell_and_check())
+		fseek_and_check(SEEK_SET);
+
+	// Always reset the state even if the file is broken
+	last_action = NONE;
+}
 
 // ********************************************
 // CDROM DRIVE
@@ -627,8 +795,8 @@ cdromDrive::cdromDrive(const char _driveLetter,
 {
 	// Init mscdex
 	error = MSCDEX_AddDrive(driveLetter,startdir,subUnit);
-	strcpy(info, "CDRom ");
-	strcat(info, startdir);
+	safe_strcpy(info, "CDRom ");
+	safe_strcat(info, startdir);
 	// Get Volume Label
 	char name[32];
 	if (MSCDEX_GetVolumeName(subUnit,name)) dirCache.SetLabel(name,true,true);
@@ -636,7 +804,7 @@ cdromDrive::cdromDrive(const char _driveLetter,
 
 bool cdromDrive::FileOpen(DOS_File * * file,char * name,Bit32u flags) {
 	if ((flags&0xf)==OPEN_READWRITE) {
-		flags &= ~OPEN_READWRITE;
+		flags &= ~static_cast<unsigned>(OPEN_READWRITE);
 	} else if ((flags&0xf)==OPEN_WRITE) {
 		DOS_SetError(DOSERR_ACCESS_DENIED);
 		return false;

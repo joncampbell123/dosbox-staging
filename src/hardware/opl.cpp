@@ -1,6 +1,7 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
- *  OPL2/OPL3 emulation library
+ *  SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -17,20 +18,18 @@
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-
-/*
+/* OPL2/OPL3 emulation library
+ *
  * Originally based on ADLIBEMU.C, an AdLib/OPL2 emulation library by Ken Silverman
  * Copyright (C) 1998-2001 Ken Silverman
  * Ken Silverman's official web site: "http://www.advsys.net/ken"
  */
 
-
-#include <math.h>
-#include <stdlib.h> // rand()
-#include <string.h> // memset()
-#include "dosbox.h"
 #include "opl.h"
 
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 static fltype recipsamp;	// inverse of sampling rate
 static Bit16s wavtable[WAVEPREC*3];	// wave form table
@@ -566,13 +565,19 @@ void adlib_init(Bit32u samplerate) {
 
 		// create waveform tables
 		for (i=0;i<(WAVEPREC>>1);i++) {
-			wavtable[(i<<1)  +WAVEPREC]	= (Bit16s)(16384*sin((fltype)((i<<1)  )*PI*2/WAVEPREC));
-			wavtable[(i<<1)+1+WAVEPREC]	= (Bit16s)(16384*sin((fltype)((i<<1)+1)*PI*2/WAVEPREC));
-			wavtable[i]					= wavtable[(i<<1)  +WAVEPREC];
+			wavtable[(i << 1) + WAVEPREC] = (Bit16s)(
+			        16384 * sin((fltype)((i << 1)) * M_PI * 2 / WAVEPREC));
+			wavtable[(i << 1) + 1 + WAVEPREC] = (Bit16s)(
+			        16384 *
+			        sin((fltype)((i << 1) + 1) * M_PI * 2 / WAVEPREC));
+			wavtable[i] = wavtable[(i << 1) + WAVEPREC];
 			// alternative: (zero-less)
-/*			wavtable[(i<<1)  +WAVEPREC]	= (Bit16s)(16384*sin((fltype)((i<<2)+1)*PI/WAVEPREC));
-			wavtable[(i<<1)+1+WAVEPREC]	= (Bit16s)(16384*sin((fltype)((i<<2)+3)*PI/WAVEPREC));
-			wavtable[i]					= wavtable[(i<<1)-1+WAVEPREC]; */
+			/*			wavtable[(i<<1)  +WAVEPREC]	=
+			   (Bit16s)(16384*sin((fltype)((i<<2)+1)*M_PI/WAVEPREC));
+			                        wavtable[(i<<1)+1+WAVEPREC] =
+			   (Bit16s)(16384*sin((fltype)((i<<2)+3)*M_PI/WAVEPREC));
+			                        wavtable[i]
+			   = wavtable[(i<<1)-1+WAVEPREC]; */
 		}
 		for (i=0;i<(WAVEPREC>>3);i++) {
 			wavtable[i+(WAVEPREC<<1)]		= wavtable[i+(WAVEPREC>>3)]-16384;
@@ -919,7 +924,8 @@ void adlib_write_index(Bitu port, Bit8u val) {
 #endif
 }
 
-static void OPL_INLINE clipit16(Bit32s ival, Bit16s* outval) {
+static INLINE void clipit16(int32_t ival, int16_t *outval)
+{
 	if (ival<32768) {
 		if (ival>-32769) {
 			*outval=(Bit16s)ival;
@@ -930,8 +936,6 @@ static void OPL_INLINE clipit16(Bit32s ival, Bit16s* outval) {
 		*outval = 32767;
 	}
 }
-
-
 
 // be careful with this
 // uses cptr and chanval, outputs into outbufl(/outbufr)

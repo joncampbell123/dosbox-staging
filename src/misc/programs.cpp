@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "programs.h"
 
 #include <vector>
 #include <sstream>
@@ -24,13 +25,15 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include "programs.h"
+
 #include "callback.h"
 #include "regs.h"
 #include "support.h"
 #include "cross.h"
 #include "control.h"
 #include "shell.h"
+#include "hardware.h"
+#include "mapper.h"
 
 Bitu call_program;
 
@@ -133,11 +136,33 @@ void Program::ChangeToLongCmd() {
 	full_arguments.assign(""); //Clear so it gets even more save
 }
 
-static char last_written_character = 0;//For 0xA to OxD 0xA expansion
-void Program::WriteOut(const char * format,...) {
+bool Program::SuppressWriteOut(const char *format)
+{
+	// Have we encountered an executable thus far?
+	static bool encountered_executable = false;
+	if (encountered_executable)
+		return false;
+	if (control->GetStartupVerbosity() <= Verbosity::SplashOnly)
+		return false;
+	if (!control->cmdline->HasExecutableName())
+		return false;
+
+	// Keep suppressing output until after we hit the first executable.
+	encountered_executable = is_executable_filename(format);
+	return true;
+}
+
+// For "\n" to "\r\n" expansion (0xA to OxD 0xA) in WriteOut* functions
+static char last_written_character = '\n';
+
+void Program::WriteOut(const char *format, ...)
+{
+	if (SuppressWriteOut(format))
+		return;
+
 	char buf[2048];
 	va_list msg;
-	
+
 	va_start(msg,format);
 	vsnprintf(buf,2047,format,msg);
 	va_end(msg);
@@ -153,11 +178,14 @@ void Program::WriteOut(const char * format,...) {
 		DOS_WriteFile(STDOUT,&out,&s);
 	}
 	dos.internal_output=false;
-	
+
 //	DOS_WriteFile(STDOUT,(Bit8u *)buf,&size);
 }
 
 void Program::WriteOut_NoParsing(const char * format) {
+	if (SuppressWriteOut(format))
+		return;
+
 	Bit16u size = (Bit16u)strlen(format);
 	char const* buf = format;
 	dos.internal_output=true;
@@ -192,7 +220,8 @@ void Program::InjectMissingNewline()
 	last_written_character = '\n';
 }
 
-bool Program::GetEnvStr(const char * entry,std::string & result) {
+bool Program::GetEnvStr(const char *entry, std::string &result) const
+{
 	/* Walk through the internal environment and see for a match */
 	PhysPt env_read=PhysMake(psp->GetEnvironment(),0);
 
@@ -217,7 +246,8 @@ bool Program::GetEnvStr(const char * entry,std::string & result) {
 	return false;
 }
 
-bool Program::GetEnvNum(Bitu num,std::string & result) {
+bool Program::GetEnvNum(Bitu num, std::string &result) const
+{
 	char env_string[1024+1];
 	PhysPt env_read=PhysMake(psp->GetEnvironment(),0);
 	do 	{
@@ -230,7 +260,8 @@ bool Program::GetEnvNum(Bitu num,std::string & result) {
 	return false;
 }
 
-Bitu Program::GetEnvCount(void) {
+Bitu Program::GetEnvCount() const
+{
 	PhysPt env_read=PhysMake(psp->GetEnvironment(),0);
 	Bitu num=0;
 	while (mem_readb(env_read)!=0) {
@@ -315,7 +346,10 @@ private:
 void CONFIG::Run(void) {
 	static const char* const params[] = {
 		"-r", "-wcp", "-wcd", "-wc", "-writeconf", "-l", "-rmconf",
-		"-h", "-help", "-?", "-axclear", "-axadd", "-axtype", "-get", "-set",
+		"-h", "-help", "-?", "-axclear", "-axadd", "-axtype",
+		"-avistart","-avistop",
+		"-startmapper",
+		"-get", "-set",
 		"-writelang", "-wl", "-securemode", "" };
 	enum prs {
 		P_NOMATCH, P_NOPARAMS, // fixed return values for GetParameterFromList
@@ -324,6 +358,8 @@ void CONFIG::Run(void) {
 		P_LISTCONF,	P_KILLCONF,
 		P_HELP, P_HELP2, P_HELP3,
 		P_AUTOEXEC_CLEAR, P_AUTOEXEC_ADD, P_AUTOEXEC_TYPE,
+		P_REC_AVI_START, P_REC_AVI_STOP,
+		P_START_MAPPER,
 		P_GETPROP, P_SETPROP,
 		P_WRITELANG, P_WRITELANG2,
 		P_SECURE
@@ -344,9 +380,6 @@ void CONFIG::Run(void) {
 				restart_params.push_back(control->cmdline->GetFileName());
 				for (size_t i = 0; i < pvars.size(); i++) {
 					restart_params.push_back(pvars[i]);
-					if (pvars[i].find(' ') != std::string::npos) {
-						pvars[i] = "\""+pvars[i]+"\""; // add back spaces
-					}
 				}
 				// the rest on the commandline, too
 				cmd->FillVector(restart_params);
@@ -358,7 +391,8 @@ void CONFIG::Run(void) {
 			Bitu size = control->configfiles.size();
 			std::string config_path;
 			Cross::GetPlatformConfigDir(config_path);
-			WriteOut(MSG_Get("PROGRAM_CONFIG_CONFDIR"), VERSION,config_path.c_str());
+			WriteOut(MSG_Get("PROGRAM_CONFIG_CONFDIR"), VERSION,
+			         config_path.c_str());
 			if (size==0) WriteOut(MSG_Get("PROGRAM_CONFIG_NOCONFIGFILE"));
 			else {
 				WriteOut(MSG_Get("PROGRAM_CONFIG_PRIMARY_CONF"),control->configfiles.front().c_str());
@@ -411,7 +445,9 @@ void CONFIG::Run(void) {
 			break;
 
 		case P_NOPARAMS:
-			if (!first) break;
+			if (!first)
+				break;
+			FALLTHROUGH;
 
 		case P_NOMATCH:
 			WriteOut(MSG_Get("PROGRAM_CONFIG_USAGE"));
@@ -426,10 +462,7 @@ void CONFIG::Run(void) {
 				if (!strcasecmp("sections",pvars[0].c_str())) {
 					// list the sections
 					WriteOut(MSG_Get("PROGRAM_CONFIG_HLP_SECTLIST"));
-					Bitu i = 0;
-					while (true) {
-						Section* sec = control->GetSection(i++);
-						if (!sec) break;
+					for (const Section *sec : *control) {
 						WriteOut("%s\n",sec->GetName());
 					}
 					return;
@@ -507,11 +540,11 @@ void CONFIG::Run(void) {
 							// print min, max for integer values if used
 							Prop_int* pint = dynamic_cast <Prop_int*>(p);
 							if (pint==NULL) E_Exit("Int property dynamic cast failed.");
-							if (pint->getMin() != pint->getMax()) {
+							if (pint->GetMin() != pint->GetMax()) {
 								std::ostringstream oss;
-								oss << pint->getMin();
+								oss << pint->GetMin();
 								oss << "..";
-								oss << pint->getMax();
+								oss << pint->GetMax();
 								propvalues += oss.str();
 							}
 						}
@@ -575,6 +608,16 @@ void CONFIG::Run(void) {
 			WriteOut("\n%s",sec->data.c_str());
 			break;
 		}
+		case P_REC_AVI_START:
+			CAPTURE_VideoStart();
+			break;
+		case P_REC_AVI_STOP:
+			CAPTURE_VideoStop();
+			break;
+		case P_START_MAPPER:
+			if (securemode_check()) return;
+			MAPPER_Run(false);
+			break;
 		case P_GETPROP: {
 			// "section property"
 			// "property"
@@ -819,28 +862,38 @@ void PROGRAMS_Init(Section* /*sec*/) {
 	MSG_Add("PROGRAM_CONFIG_NOCONFIGFILE","No config file loaded!\n");
 	MSG_Add("PROGRAM_CONFIG_PRIMARY_CONF","Primary config file: \n%s\n");
 	MSG_Add("PROGRAM_CONFIG_ADDITIONAL_CONF","Additional config files:\n");
-	MSG_Add("PROGRAM_CONFIG_CONFDIR","DOSBox %s configuration directory: \n%s\n\n");
-	
+	MSG_Add("PROGRAM_CONFIG_CONFDIR",
+	        "DOSBox Staging %s configuration directory: \n%s\n\n");
+
 	// writeconf
 	MSG_Add("PROGRAM_CONFIG_FILE_ERROR","\nCan't open file %s\n");
 	MSG_Add("PROGRAM_CONFIG_FILE_WHICH", "Writing config file %s\n");
 	
 	// help
-	MSG_Add("PROGRAM_CONFIG_USAGE", "Config tool:\n"
+	MSG_Add("PROGRAM_CONFIG_USAGE",
+	        "Config tool:\n"
 	        "-writeconf or -wc without parameter: write to primary loaded config file.\n"
 	        "-writeconf or -wc with filename: write file to config directory.\n"
 	        "Use -writelang or -wl filename to write the current language strings.\n"
-	        "-r [parameters]\n Restart DOSBox, either using the previous parameters or any that are appended.\n"
-	        "-wcp [filename]\n Write config file to the program directory, dosbox.conf or the specified \n filename.\n"
-	        "-wcd\n Write to the default config file in the config directory.\n"
+	        "-r [parameters]\n"
+	        " Restart DOSBox, either using the previous parameters or any that are appended.\n"
+	        "-wcp [filename]\n"
+	        " Write config file to the program directory, dosbox.conf or the specified\n"
+	        " filename.\n"
+	        "-wcd\n"
+	        " Write to the default config file in the config directory.\n"
 	        "-l lists configuration parameters.\n"
 	        "-h, -help, -? sections / sectionname / propertyname\n"
-	        " Without parameters, displays this help screen. Add \"sections\" for a list of\n sections."
+	        " Without parameters, displays this help screen. Add \"sections\" for a list of\n"
+	        " sections."
 	        " For info about a specific section or property add its name behind.\n"
 	        "-axclear clears the autoexec section.\n"
 	        "-axadd [line] adds a line to the autoexec section.\n"
 	        "-axtype prints the content of the autoexec section.\n"
 	        "-securemode switches to secure mode.\n"
+	        "-avistart starts AVI recording.\n"
+	        "-avistop stops AVI recording.\n"
+	        "-startmapper starts the keymapper.\n"
 	        "-get \"section property\" returns the value of the property.\n"
 	        "-set \"section property=value\" sets the value.\n");
 	MSG_Add("PROGRAM_CONFIG_HLP_PROPHLP","Purpose of property \"%s\" (contained in section \"%s\"):\n%s\n\nPossible Values: %s\nDefault value: %s\nCurrent value: %s\n");

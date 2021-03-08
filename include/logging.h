@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@
 #define DOSBOX_LOGGING_H
 
 #include <cstdio>
+
+#include "compiler.h"
 
 enum LOG_TYPES {
 	LOG_ALL,
@@ -82,6 +84,7 @@ struct LOG
 	void operator()(char const* , char const*, char const*)				{ }
 
 	void operator()(char const* , double , double , double , char const* )					{ }
+	void operator()(char const* , double, char const*, double, double )				{}
 }; //add missing operators to here
 	//try to avoid anything smaller than bit32...
 void GFX_ShowMsg(char const* format,...) GCC_ATTRIBUTE(__format__(__printf__, 1, 2));
@@ -94,7 +97,7 @@ void GFX_ShowMsg(char const* format,...) GCC_ATTRIBUTE(__format__(__printf__, 1,
 // be redirected into internal DOSBox debugger for DOS programs (C_DEBUG feature).
 #define DEBUG_LOG_MSG(...)
 #else
-// There's no portable way to expand variadic macro using C99/C++11 (or older)
+// There's no portable way to expand variadic macro using C99/C++14 (or older)
 // alone. This language limitation got removed only with C++20 (through addition
 // of __VA_OPT__ macro).
 #ifdef _MSC_VER

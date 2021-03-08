@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,19 +16,20 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include "dosbox.h"
-#include "bios.h"
-#include "mem.h"
-#include "callback.h"
-#include "regs.h"
 #include "dos_inc.h"
+
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+
+#include "bios.h"
+#include "callback.h"
+#include "mem.h"
+#include "regs.h"
+#include "serialport.h"
 #include "setup.h"
 #include "support.h"
-#include "serialport.h"
 
 DOS_Block dos;
 DOS_InfoBlock dos_infoblock;
@@ -44,7 +45,40 @@ const Bit8u DOS_DATE_months[] = {
 	0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 };
 
-static void DOS_AddDays(Bitu days) {
+uint16_t DOS_PackTime(uint16_t hour, uint16_t min, uint16_t sec) noexcept
+{
+	const auto h_bits = 0b1111100000000000 & (hour << 11);
+	const auto m_bits = 0b0000011111100000 & (min << 5);
+	const auto s_bits = 0b0000000000011111 & (sec / 2);
+	const auto packed = h_bits | m_bits | s_bits;
+	return static_cast<uint16_t>(packed);
+}
+
+uint16_t DOS_PackTime(const struct tm &datetime) noexcept
+{
+	return DOS_PackTime(static_cast<uint16_t>(datetime.tm_hour),
+	                    static_cast<uint16_t>(datetime.tm_min),
+	                    static_cast<uint16_t>(datetime.tm_sec));
+}
+
+uint16_t DOS_PackDate(uint16_t year, uint16_t mon, uint16_t day) noexcept
+{
+	const auto y_bits = 0b1111111000000000 & ((year - 1980) << 9);
+	const auto m_bits = 0b0000000111100000 & (mon << 5);
+	const auto d_bits = 0b0000000000011111 & day;
+	const auto packed = y_bits | m_bits | d_bits;
+	return static_cast<uint16_t>(packed);
+}
+
+uint16_t DOS_PackDate(const struct tm &datetime) noexcept
+{
+	return DOS_PackDate(static_cast<uint16_t>(datetime.tm_year + 1900),
+	                    static_cast<uint16_t>(datetime.tm_mon + 1),
+	                    static_cast<uint16_t>(datetime.tm_mday));
+}
+
+static void DOS_AddDays(Bitu days)
+{
 	dos.date.day += days;
 	Bit8u monthlimit = DOS_DATE_months[dos.date.month];
 
@@ -66,6 +100,18 @@ static void DOS_AddDays(Bitu days) {
 			dos.date.year++;
 		}
 	}
+}
+
+static Bit16u DOS_GetAmount(void) {
+	Bit16u amount = reg_cx;
+	if (amount > 0xfff1) {
+		Bit16u overflow = (amount & 0xf) + (reg_dx & 0xf);
+		if (overflow > 0x10) {
+			amount -= (overflow & 0xf);
+			LOG(LOG_DOSMISC,LOG_WARN)("DOS:0x%X:Amount reduced from %X to %X",reg_ah,reg_cx,amount);
+		}
+	}
+	return amount;
 }
 
 #define DATA_TRANSFERS_TAKE_CYCLES 1
@@ -633,8 +679,8 @@ static Bitu DOS_21Handler(void) {
 		}
 		break;
 	case 0x3e:		/* CLOSE Close file */
-		if (DOS_CloseFile(reg_bx)) {
-//			reg_al=0x01;	/* al destroyed. Refcount */
+		if (DOS_CloseFile(reg_bx,false,&reg_al)) {
+			/* al destroyed with pre-close refcount from sft */
 			CALLBACK_SCF(false);
 		} else {
 			reg_ax=dos.errorcode;
@@ -643,7 +689,7 @@ static Bitu DOS_21Handler(void) {
 		break;
 	case 0x3f:		/* READ Read from file or device */
 		{ 
-			Bit16u toread=reg_cx;
+			Bit16u toread=DOS_GetAmount();
 			dos.echo=true;
 			if (DOS_ReadFile(reg_bx,dos_copybuf,&toread)) {
 				MEM_BlockWrite(SegPhys(ds)+reg_dx,dos_copybuf,toread);
@@ -659,7 +705,7 @@ static Bitu DOS_21Handler(void) {
 		}
 	case 0x40:					/* WRITE Write to file or device */
 		{
-			Bit16u towrite=reg_cx;
+			Bit16u towrite=DOS_GetAmount();
 			MEM_BlockRead(SegPhys(ds)+reg_dx,dos_copybuf,towrite);
 			if (DOS_WriteFile(reg_bx,dos_copybuf,&towrite)) {
 				reg_ax=towrite;
@@ -872,15 +918,20 @@ static Bitu DOS_21Handler(void) {
 		}
 		break;		
 	case 0x57:					/* Get/Set File's Date and Time */
-		if (reg_al==0x00) {
-			if (DOS_GetFileDate(reg_bx,&reg_cx,&reg_dx)) {
+		if (reg_al == 0x00) {
+			if (DOS_GetFileDate(reg_bx, &reg_cx, &reg_dx)) {
 				CALLBACK_SCF(false);
 			} else {
+				reg_ax = dos.errorcode;
 				CALLBACK_SCF(true);
 			}
-		} else if (reg_al==0x01) {
-			LOG(LOG_DOSMISC,LOG_ERROR)("DOS:57:Set File Date Time Faked");
-			CALLBACK_SCF(false);		
+		} else if (reg_al == 0x01) {
+			if (DOS_SetFileDate(reg_bx, reg_cx, reg_dx)) {
+				CALLBACK_SCF(false);
+			} else {
+				reg_ax = dos.errorcode;
+				CALLBACK_SCF(true);
+			}
 		} else {
 			LOG(LOG_DOSMISC,LOG_ERROR)("DOS:57:Unsupported subtion %X",reg_al);
 		}
@@ -922,7 +973,7 @@ static Bitu DOS_21Handler(void) {
 			reg_bh=0;	//Unspecified error class
 		}
 		reg_bl=1;	//Retry retry retry
-		reg_ch=0;	//Unkown error locus
+		reg_ch = 0;     // Unknown error locus
 		break;
 	case 0x5a:					/* Create temporary file */
 		{
@@ -1204,6 +1255,48 @@ static Bitu DOS_26Handler(void) {
     return CBRET_NONE;
 }
 
+DOS_Version DOS_ParseVersion(const char *word, const char *args)
+{
+	DOS_Version new_version = {5, 0, 0}; // Default to 5.0
+	assert(word != NULL && args != NULL);
+	if (*word && !*args && (strchr(word, '.') != 0)) {
+		// Allow usual syntax: ver set 7.1
+		const char *p = strchr(word, '.');
+		p++;
+		int minor = -1;
+		if (isdigit(*p)) {
+			int len = strlen(p);
+			// Get the first 2 characters as minor version if there are more
+			minor = atoi(len > 2 ? std::string(p).substr(0, 2).c_str() : p);
+			// If .1 as the minor version, regard it as .10
+			if (len == 1)
+				minor *= 10;
+		}
+		// Return the new DOS version, or 0.0 for invalid DOS version
+		if (!isdigit(*word) || atoi(word) < 0 || atoi(word) > 30 || minor < 0 || (!atoi(word) && !minor)) {
+			new_version.major = 0;
+			new_version.minor = 0;
+		} else {
+			new_version.major = static_cast<uint8_t>(atoi(word));
+			new_version.minor = static_cast<uint8_t>(minor);
+        }
+	} else if (*word || *args) { // Official DOSBox syntax: ver set 6 2
+		// If only an integer like 7, regard it as 7.0, or take args as minor version
+		int minor = *args ? (isdigit(*args) ? atoi(args) : -1) : 0;
+		// Get the first 2 digits of if there are more in the number
+		while (minor > 99)
+			minor /= 10;
+		// Return the new DOS version, or 0.0 for invalid DOS version
+		if (!isdigit(*word) || atoi(word) < 0 || atoi(word) > 30 || minor < 0 || (!atoi(word) && !minor)) {
+			new_version.major = 0;
+			new_version.minor = 0;
+		} else {
+			new_version.major = static_cast<uint8_t>(atoi(word));
+			new_version.minor = static_cast<uint8_t>(minor);
+		}
+	}
+	return new_version;
+}
 
 class DOS:public Module_base{
 private:
@@ -1250,11 +1343,20 @@ public:
 		DOS_SetupMisc();							/* Some additional dos interrupts */
 		DOS_SDA(DOS_SDA_SEG,DOS_SDA_OFS).SetDrive(25); /* Else the next call gives a warning. */
 		DOS_SetDefaultDrive(25);
-	
+
 		dos.version.major=5;
 		dos.version.minor=0;
 		dos.direct_output=false;
 		dos.internal_output=false;
+
+		const Section_prop* section = static_cast<Section_prop*>(configuration);
+		char *args = const_cast<char *>(section->Get_string("ver"));
+		const char* word = StripWord(args);
+		const auto new_version = DOS_ParseVersion(word, args);
+		if (new_version.major || new_version.minor) {
+			dos.version.major = new_version.major;
+			dos.version.minor = new_version.minor;
+		}
 	}
 	~DOS(){
 		for (Bit16u i=0;i<DOS_DRIVES;i++) delete Drives[i];

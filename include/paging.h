@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,16 +16,12 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_PAGING_H
 #define DOSBOX_PAGING_H
 
-#ifndef DOSBOX_DOSBOX_H
 #include "dosbox.h"
-#endif
-#ifndef DOSBOX_MEM_H
+
 #include "mem.h"
-#endif
 
 // disable this to reduce the size of the TLB
 // NOTE: does not work with the dynamic core (dynrec is fine)
@@ -61,7 +57,8 @@ class PageDirectory;
 
 class PageHandler {
 public:
-	virtual ~PageHandler(void) { }
+	virtual ~PageHandler() = default;
+
 	virtual Bitu readb(PhysPt addr);
 	virtual Bitu readw(PhysPt addr);
 	virtual Bitu readd(PhysPt addr);
@@ -76,7 +73,8 @@ public:
 	virtual bool writeb_checked(PhysPt addr,Bitu val);
 	virtual bool writew_checked(PhysPt addr,Bitu val);
 	virtual bool writed_checked(PhysPt addr,Bitu val);
-	Bitu flags;
+
+	Bitu flags = 0x0;
 };
 
 /* Some other functions */
@@ -276,12 +274,17 @@ static INLINE Bit16u mem_readw_inline(PhysPt address) {
 	} else return mem_unalignedreadw(address);
 }
 
-static INLINE Bit32u mem_readd_inline(PhysPt address) {
-	if ((address & 0xfff)<0xffd) {
-		HostPt tlb_addr=get_tlb_read(address);
-		if (tlb_addr) return host_readd(tlb_addr+address);
-		else return (get_tlb_readhandler(address))->readd(address);
-	} else return mem_unalignedreadd(address);
+static INLINE uint32_t mem_readd_inline(PhysPt address)
+{
+	if ((address & 0xfff) < 0xffd) {
+		HostPt tlb_addr = get_tlb_read(address);
+		if (tlb_addr)
+			return host_readd(tlb_addr + address);
+		else
+			return static_cast<uint32_t>((get_tlb_readhandler(address))->readd(address));
+	} else {
+		return mem_unalignedreadd(address);
+	}
 }
 
 static INLINE void mem_writeb_inline(PhysPt address,Bit8u val) {

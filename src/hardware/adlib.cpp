@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,17 +16,20 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "adlib.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <sys/types.h>
-#include "adlib.h"
 
+#include "cpu.h"
 #include "setup.h"
+#include "support.h"
 #include "mapper.h"
 #include "mem.h"
 #include "dbopl.h"
-#include "../libs/nuked/nukedopl.h"
+#include "../libs/nuked/opl3.h"
 
 #include "mame/emu.h"
 #include "mame/fmopl.h"
@@ -43,7 +46,7 @@ namespace OPL2 {
 		virtual void WriteReg( Bit32u reg, Bit8u val ) {
 			adlib_write(reg,val);
 		}
-		virtual Bit32u WriteAddr( Bit32u port, Bit8u val ) {
+		virtual Bit32u WriteAddr( Bit32u /*port*/, Bit8u val ) {
 			return val;
 		}
 
@@ -102,7 +105,7 @@ struct Handler : public Adlib::Handler {
 		ym3812_write(chip, 0, reg);
 		ym3812_write(chip, 1, val);
 	}
-	virtual Bit32u WriteAddr(Bit32u port, Bit8u val) {
+	virtual Bit32u WriteAddr(Bit32u /*port*/, Bit8u val) {
 		return val;
 	}
 	virtual void Generate(MixerChannel* chan, Bitu samples) {
@@ -134,7 +137,7 @@ struct Handler : public Adlib::Handler {
 		ymf262_write(chip, 0, reg);
 		ymf262_write(chip, 1, val);
 	}
-	virtual Bit32u WriteAddr(Bit32u port, Bit8u val) {
+	virtual Bit32u WriteAddr(Bit32u /*port*/, Bit8u val) {
 		return val;
 	}
 	virtual void Generate(MixerChannel* chan, Bitu samples) {
@@ -340,15 +343,24 @@ class Capture {
 	void WriteCache( void  ) {
 		Bitu i, val;
 		/* Check the registers to add */
-		for (i=0;i<256;i++) {
-			//Skip the note on entries
-			if (i>=0xb0 && i<=0xb8) 
-				continue;
+		for (i = 0;i < 256;i++) {
 			val = (*cache)[ i ];
+			//Silence the note on entries
+			if (i >= 0xb0 && i <= 0xb8) {
+				val &= ~0x20;
+			}
+			if (i == 0xbd) {
+				val &= ~0x1f;
+			}
+
 			if (val) {
 				AddWrite( i, val );
 			}
 			val = (*cache)[ 0x100 + i ];
+
+			if (i >= 0xb0 && i <= 0xb8) {
+				val &= ~0x20;
+			}
 			if (val) {
 				AddWrite( 0x100 + i, val );
 			}
@@ -468,40 +480,41 @@ skipWrite:
 Chip
 */
 
+Chip::Chip() : timer0(80), timer1(320) {
+}
+
 bool Chip::Write( Bit32u reg, Bit8u val ) {
+	//if(reg == 0x02 || reg == 0x03 || reg == 0x04) LOG(LOG_MISC,LOG_ERROR)("write adlib timer %X %X",reg,val);
 	switch ( reg ) {
 	case 0x02:
-		timer[0].counter = val;
+		timer0.Update(PIC_FullIndex() );
+		timer0.SetCounter(val);
 		return true;
 	case 0x03:
-		timer[1].counter = val;
+		timer1.Update(PIC_FullIndex());
+		timer1.SetCounter(val);
 		return true;
 	case 0x04:
-		double time;
-		time = PIC_FullIndex();
+		//Reset overflow in both timers
 		if ( val & 0x80 ) {
-			timer[0].Reset( time );
-			timer[1].Reset( time );
+			timer0.Reset();
+			timer1.Reset();
 		} else {
-			timer[0].Update( time );
-			timer[1].Update( time );
-			if ( val & 0x1 ) {
-				timer[0].Start( time, 80 );
-			} else {
-				timer[0].Stop( );
+			const double time = PIC_FullIndex();
+			if (val & 0x1) {
+				timer0.Start(time);
 			}
-			timer[0].masked = (val & 0x40) > 0;
-			if ( timer[0].masked )
-				timer[0].overflow = false;
-			if ( val & 0x2 ) {
-				timer[1].Start( time, 320 );
-			} else {
-				timer[1].Stop( );
+			else {
+				timer0.Stop();
 			}
-			timer[1].masked = (val & 0x20) > 0;
-			if ( timer[1].masked )
-				timer[1].overflow = false;
-
+			if (val & 0x2) {
+				timer1.Start(time);
+			}
+			else {
+				timer1.Stop();
+			}
+			timer0.SetMask((val & 0x40) > 0);
+			timer1.SetMask((val & 0x20) > 0);
 		}
 		return true;
 	}
@@ -510,21 +523,18 @@ bool Chip::Write( Bit32u reg, Bit8u val ) {
 
 
 Bit8u Chip::Read( ) {
-	double time( PIC_FullIndex() );
-	timer[0].Update( time );
-	timer[1].Update( time );
+	const double time( PIC_FullIndex() );
 	Bit8u ret = 0;
 	//Overflow won't be set if a channel is masked
-	if ( timer[0].overflow ) {
+	if (timer0.Update(time)) {
 		ret |= 0x40;
 		ret |= 0x80;
 	}
-	if ( timer[1].overflow ) {
+	if (timer1.Update(time)) {
 		ret |= 0x20;
 		ret |= 0x80;
 	}
 	return ret;
-
 }
 
 void Module::CacheWrite( Bit32u reg, Bit8u val ) {
@@ -590,11 +600,11 @@ Bitu Module::CtrlRead( void ) {
 }
 
 
-void Module::PortWrite( Bitu port, Bitu val, Bitu iolen ) {
+void Module::PortWrite( Bitu port, Bitu val, Bitu /*iolen*/ ) {
 	//Keep track of last write time
 	lastUsed = PIC_Ticks;
 	//Maybe only enable with a keyon?
-	if ( !mixerChan->enabled ) {
+	if (!mixerChan->is_enabled) {
 		mixerChan->Enable(true);
 	}
 	if ( port&1 ) {
@@ -606,7 +616,7 @@ void Module::PortWrite( Bitu port, Bitu val, Bitu iolen ) {
 					break;
 				}
 			}
-			//Fall-through if not handled by control chip
+			FALLTHROUGH;
 		case MODE_OPL2:
 		case MODE_OPL3:
 			if ( !chip[0].Write( reg.normal, val ) ) {
@@ -646,7 +656,7 @@ void Module::PortWrite( Bitu port, Bitu val, Bitu iolen ) {
 					break;
 				}
 			}
-			//Fall-through if not handled by control chip
+			FALLTHROUGH;
 		case MODE_OPL3:
 			reg.normal = handler->WriteAddr( port, val ) & 0x1ff;
 			break;
@@ -665,7 +675,13 @@ void Module::PortWrite( Bitu port, Bitu val, Bitu iolen ) {
 }
 
 
-Bitu Module::PortRead( Bitu port, Bitu iolen ) {
+Bitu Module::PortRead( Bitu port, Bitu /*iolen*/ ) {
+	//roughly half a micro (as we already do 1 micro on each port read and some tests revealed it taking 1.5 micros to read an adlib port)
+	Bits delaycyc = (CPU_CycleMax/2048); 
+	if(GCC_UNLIKELY(delaycyc > CPU_Cycles)) delaycyc = CPU_Cycles;
+	CPU_Cycles -= delaycyc;
+	CPU_IODelayRemoved += delaycyc;
+
 	switch ( mode ) {
 	case MODE_OPL2:
 		//We allocated 4 ports, so just return -1 for the higher ones
@@ -683,7 +699,7 @@ Bitu Module::PortRead( Bitu port, Bitu iolen ) {
 				return CtrlRead();
 			}
 		}
-		//Fall-through if not handled by control chip
+		FALLTHROUGH;
 	case MODE_OPL3:
 		//We allocated 4 ports, so just return -1 for the higher ones
 		if ( !(port & 3 ) ) {
@@ -705,6 +721,7 @@ Bitu Module::PortRead( Bitu port, Bitu iolen ) {
 
 void Module::Init( Mode m ) {
 	mode = m;
+	memset(cache, 0, ARRAY_LEN(cache));
 	switch ( mode ) {
 	case MODE_OPL3:
 	case MODE_OPL3GOLD:
@@ -719,9 +736,7 @@ void Module::Init( Mode m ) {
 	}
 }
 
-}; //namespace
-
-
+} // namespace Adlib
 
 static Adlib::Module* module = 0;
 
@@ -779,14 +794,14 @@ static void SaveRad() {
 	}
 	b[w++] = 0;		//instrument 0, no more instruments following
 	b[w++] = 1;		//1 pattern following
-	//Zero out the remaing part of the file a bit to make rad happy
+	//Zero out the remaining part of the file a bit to make rad happy
 	for ( int i = 0; i < 64; i++ ) {
 		b[w++] = 0;
 	}
 	fwrite( b, 1, w, handle );
 	fclose( handle );
 };
-#endif // 0
+#endif
 
 static void OPL_SaveRawEvent(bool pressed) {
 	if (!pressed)
@@ -833,7 +848,7 @@ Module::Module(Section *configuration)
 	  mixerObject(),
 	  mode(MODE_OPL2), // TODO this is set in Init and there's no good default
 	  reg{0}, // union
-	  ctrl{false, 0, 0xff, 0xff},
+	  ctrl{false, 0, 0xff, 0xff, false},
 	  mixerChan(nullptr),
 	  lastUsed(0),
 	  handler(nullptr),
@@ -841,18 +856,15 @@ Module::Module(Section *configuration)
 {
 	Section_prop * section=static_cast<Section_prop *>(configuration);
 	Bitu base = section->Get_hex("sbbase");
-	Bitu rate = section->Get_int("oplrate");
-	//Make sure we can't select lower than 8000 to prevent fixed point issues
-	if ( rate < 8000 )
-		rate = 8000;
+
 	ctrl.mixer = section->Get_bool("sbmixer");
 
-	mixerChan = mixerObject.Install(OPL_CallBack,rate,"FM");
+	mixerChan = mixerObject.Install(OPL_CallBack, 0, "FM");
 	//Used to be 2.0, which was measured to be too high. Exact value depends on card/clone.
 	mixerChan->SetScale( 1.5f );  
 
 	handler = make_opl_handler(section->Get_string("oplemu"), oplmode);
-	handler->Init(rate);
+	handler->Init(mixerChan->GetSampleRate());
 
 	bool single = false;
 	switch ( oplmode ) {
@@ -885,7 +897,8 @@ Module::Module(Section *configuration)
 	WriteHandler[2].Install(base+8,OPL_Write,IO_MB, 2);
 	ReadHandler[2].Install(base+8,OPL_Read,IO_MB, 1);
 
-	MAPPER_AddHandler(OPL_SaveRawEvent,MK_f7,MMOD1|MMOD2,"caprawopl","Cap OPL");
+	MAPPER_AddHandler(OPL_SaveRawEvent, SDL_SCANCODE_UNKNOWN, 0,
+	                  "caprawopl", "Rec. OPL");
 }
 
 Module::~Module() {
@@ -900,15 +913,14 @@ Module::~Module() {
 //Initialize static members
 OPL_Mode Module::oplmode=OPL_none;
 
-};	//Adlib Namespace
-
+} // namespace Adlib
 
 void OPL_Init(Section* sec,OPL_Mode oplmode) {
 	Adlib::Module::oplmode = oplmode;
 	module = new Adlib::Module( sec );
 }
 
-void OPL_ShutDown(Section* sec){
+void OPL_ShutDown(Section* /*sec*/){
 	delete module;
 	module = 0;
 

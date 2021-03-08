@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -104,9 +104,11 @@ void XGA_Write_Multifunc(Bitu val, Bitu len) {
 			xga.read_sel = dataval;
 			break;
 		default:
-			LOG_MSG("XGA: Unhandled multifunction command %x", regselect);
-			break;
-	}
+		        LOG_MSG("XGA: Unhandled multifunction command "
+		                "%#" PRIxPTR,
+		                regselect);
+		        break;
+	        }
 }
 
 Bitu XGA_Read_Multifunc() {
@@ -637,35 +639,45 @@ void XGA_DrawWait(Bitu val, Bitu len)
 							break;
 						default:
 							// Let's hope they never show up ;)
-							LOG_MSG("XGA: unsupported bpp / datawidth combination %x",
-								xga.waitcmd.buswidth);
-							break;
-					};
-					break;
-			
-				case 0x02: // Data from PIX_TRANS selects the mix
-					switch(xga.waitcmd.buswidth&0x60) {
-						case 0x0:
-							chunksize=8;
-							chunks=1;
-							break;
-						case 0x20: // 16 bit
-							chunksize=16;
-							if(len==4) chunks=2;
-							else chunks = 1;
-							break;
-						case 0x40: // 32 bit
-							chunksize=16;
-							if(len==4) chunks=2;
-							else chunks = 1;
-							break;
-						case 0x60: // undocumented guess (but works)
-							chunksize=8;
-							chunks=4;
-							break;
-					}
-					
-					for(Bitu k = 0; k < chunks; k++) { // chunks counter
+				                        LOG_MSG("XGA: "
+				                                "unsupported "
+				                                "bpp / "
+				                                "datawidth "
+				                                "combination "
+				                                "%#" PRIxPTR,
+				                                xga.waitcmd.buswidth);
+				                        break;
+			                        };
+			                        break;
+
+		                case 0x02: // Data from PIX_TRANS selects the mix
+			                switch (xga.waitcmd.buswidth & 0x60) {
+			                case 0x0:
+				                chunksize = 8;
+				                chunks = 1;
+				                break;
+			                case 0x20: // 16 bit
+				                chunksize = 16;
+				                if (len == 4)
+					                chunks = 2;
+				                else
+					                chunks = 1;
+				                break;
+			                case 0x40: // 32 bit
+				                chunksize = 16;
+				                if (len == 4)
+					                chunks = 2;
+				                else
+					                chunks = 1;
+				                break;
+			                case 0x60: // undocumented guess (but
+			                           // works)
+				                chunksize = 8;
+				                chunks = 4;
+				                break;
+			                }
+
+			                for(Bitu k = 0; k < chunks; k++) { // chunks counter
 						xga.waitcmd.newline = false;
 						for (Bitu n = 0; n < chunksize; ++n) { // pixels
 							// This formula can rule the world ;)
@@ -715,7 +727,6 @@ void XGA_BlitRect(Bitu val) {
 	Bit32u xat, yat;
 	Bitu srcdata;
 	Bitu dstdata;
-
 	Bits srcx, srcy, tarx, tary, dx, dy;
 
 	dx = -1;
@@ -723,11 +734,6 @@ void XGA_BlitRect(Bitu val) {
 
 	if(((val >> 5) & 0x01) != 0) dx = 1;
 	if(((val >> 7) & 0x01) != 0) dy = 1;
-
-	srcx = xga.curx;
-	srcy = xga.cury;
-	tarx = xga.destx;
-	tary = xga.desty;
 
 	Bitu mixselect = (xga.pix_cntl >> 6) & 0x3;
 	uint32_t mixmode = 0x67; /* Source is bitmap data, mix mode is src */
@@ -746,9 +752,10 @@ void XGA_BlitRect(Bitu val) {
 			break;
 	}
 
-
 	/* Copy source to video ram */
-	for(yat=0;yat<=xga.MIPcount ;yat++) {
+	srcy = xga.cury;
+	tary = xga.desty;
+	for (yat = 0; yat <= xga.MIPcount; yat++) {
 		srcx = xga.curx;
 		tarx = xga.destx;
 
@@ -1154,11 +1161,13 @@ void XGA_Write(Bitu port, Bitu val, Bitu len) {
 				//LOG_MSG("XGA: Wrote to port %4x with %08x, len %x", port, val, len);
 				xga.waitcmd.newline = false;
 				XGA_DrawWait(val, len);
-				
-			}
-			else LOG_MSG("XGA: Wrote to port %x with %x, len %x", port, val, len);
-			break;
-	}
+
+		        } else
+			        LOG_MSG("XGA: Wrote to port %#" PRIxPTR
+			                " with %#" PRIxPTR ", len %#" PRIxPTR,
+			                port, val, len);
+		        break;
+	        }
 }
 
 Bitu XGA_Read(Bitu port, Bitu len) {

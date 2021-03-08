@@ -2,7 +2,10 @@
 #define CONF_BRAND "staging-git"
 
 /* Version number of package */
-#define VERSION "git"
+#define VERSION "0.77.0"
+
+/* This macro is going to be overriden via CI */
+#define DOSBOX_DETAILED_VERSION "git"
 
 /* Define to 1 to enable internal debugger, requires libcurses */
 #define C_DEBUG 0
@@ -15,6 +18,9 @@
 
 /* Define to 1 to enable internal modem support, requires SDL_net */
 #define C_MODEM 1
+
+/* Define to 1 to enable NE2000 ethernet passthrough, requires libpcap */
+#define C_NE2000 0
 
 /* Define to 1 to enable IPX networking support, requires SDL_net */
 #define C_IPX 1
@@ -39,6 +45,9 @@
 /* Enable memory function inlining in */
 #define C_CORE_INLINE 1
 
+/* Define to 1 to enable FluidSynth MIDI synthesizer */
+#define C_FLUIDSYNTH 1
+
 /* Enable the FPU module, still only for beta testing */
 #define C_FPU 1
 
@@ -54,14 +63,18 @@
 /* Define to 1 to use a unaligned memory access */
 #define C_UNALIGNED_MEMORY 1
 
-/* environ is defined */
-#define ENVIRON_INCLUDED 1
-
-/* environ can be linked */
-#define ENVIRON_LINKED 1
+/* Prevent <windows.h> from clobbering std::min and std::max */
+#define NOMINMAX 1
 
 /* Define to 1 if you want serial passthrough support. */
 #define C_DIRECTSERIAL 1
 
-#define INLINE __forceinline
-#define DB_FASTCALL __fastcall
+// Enables mathematical constants under Visual Studio, such as M_PI
+// https://docs.microsoft.com/en-us/cpp/c-runtime-library/math-constants
+#define _USE_MATH_DEFINES
+
+// MSVC issues pedantic warnings on POSIX functions; for portability we don't
+// want to deal with these warnings, as the only way to avoid them is using
+// Microsoft-specific names and functions instead of POSIX conformant ones.
+// https://docs.microsoft.com/en-us/cpp/error-messages/compiler-warnings/compiler-warning-level-3-c4996?view=vs-2019#posix-function-names
+#define _CRT_NONSTDC_NO_WARNINGS

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,27 +16,40 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "shell.h"
 
+#include <climits>
 #include <stdlib.h>
 #include <string.h>
 
-#include "shell.h"
 #include "support.h"
 
+// Permitted ASCII control characters in batch files
+constexpr uint8_t BACKSPACE = 8;
+constexpr uint8_t CARRIAGE_RETURN = '\r';
+constexpr uint8_t ESC = 27;
+constexpr uint8_t LINE_FEED = '\n';
+constexpr uint8_t TAB = '\t';
+constexpr uint8_t UNIT_SEPARATOR = 31;
+
 BatchFile::BatchFile(DOS_Shell *host,
-                     char const * const resolved_name,
-                     char const * const entered_name,
-                     char const * const cmd_line)
-	: file_handle(0),
-	  location(0),
-	  echo(host->echo),
-	  shell(host),
-	  prev(host->bf),
-	  cmd(new CommandLine(entered_name, cmd_line)),
-	  filename("")
+                     char const *const resolved_name,
+                     char const *const entered_name,
+                     char const *const cmd_line)
+        : file_handle(0),
+          location(0),
+          echo(host->echo),
+          shell(host),
+          prev(host->bf),
+          cmd(new CommandLine(entered_name, cmd_line)),
+          filename("")
 {
 	char totalname[DOS_PATHLENGTH+4];
-	DOS_Canonicalize(resolved_name,totalname); // Get fullname including drive specificiation
+
+	// Get fullname including drive specification
+	if (!DOS_Canonicalize(resolved_name, totalname))
+		E_Exit("SHELL: Can't determine path to batch file %s", resolved_name);
+	
 	filename = totalname;
 	// Test if file is openable
 	if (!DOS_OpenFile(totalname,(DOS_NOT_INHERIT|OPEN_READ),&file_handle)) {
@@ -52,6 +65,7 @@ BatchFile::~BatchFile() {
 	shell->echo=echo;
 }
 
+// TODO: Refactor this sprawling function into smaller ones without GOTOs
 bool BatchFile::ReadLine(char * line) {
 	//Open the batchfile and seek to stored postion
 	if (!DOS_OpenFile(filename.c_str(),(DOS_NOT_INHERIT|OPEN_READ),&file_handle)) {
@@ -61,35 +75,62 @@ bool BatchFile::ReadLine(char * line) {
 	}
 	DOS_SeekFile(file_handle,&(this->location),DOS_SEEK_SET);
 
-	Bit8u c=0;Bit16u n=1;
-	char temp[CMD_MAXLINE];
+	uint16_t bytes_read = 1;
+	uint8_t data = 0;
+	char val = 0;
+	char temp[CMD_MAXLINE] = "";
+	char temp_cycles_hack[CMD_MAXLINE];
 emptyline:
 	char * cmd_write=temp;
 	do {
-		n=1;
-		DOS_ReadFile(file_handle,&c,&n);
-		if (n>0) {
-			/* Why are we filtering this ?
-			 * Exclusion list: tab for batch files 
-			 * escape for ansi
-			 * backspace for alien odyssey */
-			if (c>31 || c==0x1b || c=='\t' || c==8) {
-				//Only add it if room for it (and trailing zero) in the buffer, but do the check here instead at the end
-				//So we continue reading till EOL/EOF
-				if (((cmd_write - temp) + 1) < (CMD_MAXLINE - 1))
-					*cmd_write++ = c;
+		bytes_read = 1;
+		DOS_ReadFile(file_handle, &data, &bytes_read);
+		val = static_cast<char>(data);
+
+		if (bytes_read > 0) {
+			/* Inclusion criteria:
+			 *  - backspace for alien odyssey
+			 *  - tab for batch files
+			 *  - escape for ANSI
+			 * Note: the negative allowance permits high
+			 * international ASCII characters that are wrapped when
+			 * char is a signed type
+			 */
+			if (val < 0 || val > UNIT_SEPARATOR ||
+			    val == BACKSPACE || val == ESC || val == TAB) {
+				// Only add it if room for it (and trailing zero)
+				// in the buffer, but do the check here instead
+				// at the end So we continue reading till EOL/EOF
+				if (cmd_write - temp + 1 < CMD_MAXLINE - 1) {
+					*cmd_write++ = val;
+				}
+			} else if (val != LINE_FEED && val != CARRIAGE_RETURN) {
+				shell->WriteOut(MSG_Get("SHELL_ILLEGAL_CONTROL_CHARACTER"),
+				                val, val);
 			}
 		}
-	} while (c!='\n' && n);
+	} while (val != LINE_FEED && bytes_read);
 	*cmd_write=0;
-	if (!n && cmd_write==temp) {
+	if (!bytes_read && cmd_write == temp) {
 		//Close file and delete bat file
 		DOS_CloseFile(file_handle);
 		delete this;
-		return false;	
+		return false;
 	}
 	if (!strlen(temp)) goto emptyline;
 	if (temp[0]==':') goto emptyline;
+
+	// Lambda that copies the src to cmd_write, provided the result fits
+	// within CMD_MAXLINE while taking the existing line into consideration.
+	// Finally it moves the cmd_write pointer ahead by the length copied.
+	auto append_cmd_write = [&cmd_write, &line](const char *src) {
+		const auto src_len = strlen(src);
+		const auto req_len = cmd_write - line + static_cast<int>(src_len) + 1;
+		if (src_len && req_len < CMD_MAXLINE) {
+			safe_strncpy(cmd_write, src, req_len);
+			cmd_write += src_len;
+		}
+	};
 
 	/* Now parse the line read from the bat file for % stuff */
 	cmd_write=line;
@@ -106,11 +147,7 @@ emptyline:
 			if (cmd_read[0] == '0') {  /* Handle %0 */
 				const char *file_name = cmd->GetFileName();
 				cmd_read++;
-				size_t name_len = strlen(file_name);
-				if (((cmd_write - line) + name_len) < (CMD_MAXLINE - 1)) {
-					strcpy(cmd_write,file_name);
-					cmd_write += name_len;
-				}
+				append_cmd_write(file_name);
 				continue;
 			}
 			char next = cmd_read[0];
@@ -120,29 +157,43 @@ emptyline:
 				next -= '0';
 				if (cmd->GetCount()<(unsigned int)next) continue;
 				std::string word;
-				if (!cmd->FindCommand(next,word)) continue;
-				size_t name_len = strlen(word.c_str());
-				if (((cmd_write - line) + name_len) < (CMD_MAXLINE - 1)) {
-					strcpy(cmd_write,word.c_str());
-					cmd_write += name_len;
-				}
+				assert(next >= 0);
+				if (!cmd->FindCommand(static_cast<unsigned>(next), word))
+					continue;
+				append_cmd_write(word.c_str());
 				continue;
 			} else {
 				/* Not a command line number has to be an environment */
 				char * first = strchr(cmd_read,'%');
-				/* No env afterall. Ignore a single % */
-				if (!first) {/* *cmd_write++ = '%';*/continue;}
+				/* No env after all. Ignore a single % */
+				if (!first) {
+					/* *cmd_write++ = '%';*/
+					//check if input contains cycles + max/auto  and that next character is space or empty
+					//If so, don't ignore it. This way cycles can still be set from within batch files
+					char peak = *(cmd_read);
+					if (peak == 0 || peak == ' ' || peak == '\r' || peak == '\n') {
+						strncpy(temp_cycles_hack,temp,cmd_read-temp);
+						temp_cycles_hack[cmd_read-temp] = 0;
+						upcase(temp_cycles_hack);
+						const char* cycles_test_cycles = strstr(temp_cycles_hack,"CYCLES");
+						if (cycles_test_cycles) {
+							const char* cycles_test_max = strstr(cycles_test_cycles,"MAX");
+							const char* cycles_test_auto = strstr(cycles_test_cycles,"AUTO");
+							if ( cycles_test_max  || cycles_test_auto )	{
+								   if (((cmd_write - line) + 1) < (CMD_MAXLINE - 1))
+									   *cmd_write++ = '%';
+							}
+						}
+					}
+					continue;
+				}
 				*first++ = 0;
 				std::string env;
 				if (shell->GetEnvStr(cmd_read,env)) {
 					const char* equals = strchr(env.c_str(),'=');
 					if (!equals) continue;
 					equals++;
-					size_t name_len = strlen(equals);
-					if (((cmd_write - line) + name_len) < (CMD_MAXLINE - 1)) {
-						strcpy(cmd_write,equals);
-						cmd_write += name_len;
-					}
+					append_cmd_write(equals);
 				}
 				cmd_read = first;
 			}
@@ -159,6 +210,7 @@ emptyline:
 	return true;	
 }
 
+// TODO: Refactor this sprawling function into smaller ones without GOTOs
 bool BatchFile::Goto(char * where) {
 	//Open bat file and search for the where string
 	if (!DOS_OpenFile(filename.c_str(),(DOS_NOT_INHERIT|OPEN_READ),&file_handle)) {
@@ -167,23 +219,34 @@ bool BatchFile::Goto(char * where) {
 		return false;
 	}
 
-	char cmd_buffer[CMD_MAXLINE];
-	char * cmd_write;
+	char cmd_buffer[CMD_MAXLINE] = "";
+	char *cmd_write = nullptr;
 
 	/* Scan till we have a match or return false */
-	Bit8u c;Bit16u n;
+	uint16_t bytes_read = 1;
+	uint8_t data = 0;
+	char val = 0;
 again:
 	cmd_write=cmd_buffer;
 	do {
-		n=1;
-		DOS_ReadFile(file_handle,&c,&n);
-		if (n>0) {
-			if (c>31) {
-				if (((cmd_write - cmd_buffer) + 1) < (CMD_MAXLINE - 1))
-					*cmd_write++ = c;
+		bytes_read = 1;
+		DOS_ReadFile(file_handle, &data, &bytes_read);
+		val = static_cast<char>(data);
+		if (bytes_read > 0) {
+			// Note: the negative allowance permits high
+			// international ASCII characters that are wrapped when
+			// char is a signed type
+			if (val < 0 || val > UNIT_SEPARATOR) {
+				if (cmd_write - cmd_buffer + 1 < CMD_MAXLINE - 1) {
+					*cmd_write++ = val;
+				}
+			} else if (val != BACKSPACE && val != CARRIAGE_RETURN &&
+			           val != ESC && val != LINE_FEED && val != TAB) {
+				shell->WriteOut(MSG_Get("SHELL_ILLEGAL_CONTROL_CHARACTER"),
+				                val, val);
 			}
 		}
-	} while (c!='\n' && n);
+	} while (val != LINE_FEED && bytes_read);
 	*cmd_write++ = 0;
 	char *nospace = trim(cmd_buffer);
 	if (nospace[0] == ':') {
@@ -207,15 +270,16 @@ again:
 		}
 	   
 	}
-	if (!n) {
+	if (!bytes_read) {
 		DOS_CloseFile(file_handle);
 		delete this;
-		return false;	
+		return false;
 	}
 	goto again;
 	return false;
 }
 
-void BatchFile::Shift(void) {
+void BatchFile::Shift()
+{
 	cmd->Shift(1);
 }

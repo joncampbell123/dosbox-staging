@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,7 +16,6 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_DOSBOX_H
 #define DOSBOX_DOSBOX_H
 
@@ -24,7 +23,16 @@
 #include "compiler.h"
 #include "types.h"
 
-GCC_ATTRIBUTE(noreturn) void E_Exit(const char * message,...) GCC_ATTRIBUTE( __format__(__printf__, 1, 2));
+int sdl_main(int argc, char *argv[]);
+
+// The exit_requested bool is a conditional break in the parse-loop and
+// machine-loop. Set it to true to gracefully quit in expected circumstances.
+extern bool exit_requested;
+
+// The E_Exit function throws an exception to quit. Call it in unexpected
+// circumstances.
+[[noreturn]] void E_Exit(const char *message, ...)
+        GCC_ATTRIBUTE(__format__(__printf__, 1, 2));
 
 void MSG_Add(const char*,const char*); //add messages to the internal languagefile
 const char* MSG_Get(char const *);     //get messages from the internal languagefile
@@ -32,6 +40,8 @@ const char* MSG_Get(char const *);     //get messages from the internal language
 class Section;
 
 typedef Bitu (LoopHandler)(void);
+
+const char *DOSBOX_GetDetailedVersion() noexcept;
 
 void DOSBOX_RunMachine();
 void DOSBOX_SetLoop(LoopHandler * handler);

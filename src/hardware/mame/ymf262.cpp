@@ -1,4 +1,5 @@
-// license:GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
 // copyright-holders:Jarek Burczynski
 /*
 **
@@ -228,9 +229,9 @@ struct OPL3
 	uint32_t  pan[18*4];              /* channels output masks (0xffffffff = enable); 4 masks per one channel */
 	uint32_t  pan_ctrl_value[18];     /* output control values 1 per one channel (1 value contains 4 masks) */
 
-	signed int chanout[18];
-	signed int phase_modulation;        /* phase modulation input (SLOT 2) */
-	signed int phase_modulation2;   /* phase modulation input (SLOT 3 in 4 operator channels) */
+	int32_t chanout[18];
+	int32_t phase_modulation;         /* phase modulation input (SLOT 2) */
+	int32_t phase_modulation2;        /* phase modulation input (SLOT 3 in 4 operator channels) */
 
 	uint32_t  eg_cnt;                 /* global envelope generator counter    */
 	uint32_t  eg_timer;               /* global envelope generator counter works at frequency = chipclock/288 (288=8*36) */
@@ -758,9 +759,9 @@ static inline void advance(OPL3 *chip)
 				{
 					op->volume += eg_inc[op->eg_sel_dr + ((chip->eg_cnt>>op->eg_sh_dr)&7)];
 
-					if (op->volume >= op->sl)
+					const auto sl = static_cast<int32_t>(op->sl);
+					if (op->volume >= sl)
 						op->state = EG_SUS;
-
 				}
 			break;
 
@@ -1006,7 +1007,7 @@ number   number    BLK/FNUM2 FNUM    Drum  Hat   Drum  Tom  Cymbal
 static inline void chan_calc_rhythm(OPL3 *chip, OPL3_CH *CH, unsigned int noise)
 {
 	OPL3_SLOT *SLOT;
-	signed int *chanout = chip->chanout;
+	int32_t *chanout = chip->chanout;
 	signed int out;
 	unsigned int env;
 
@@ -1218,7 +1219,8 @@ static int init_tables(void)
 	for (i=0; i<SIN_LEN; i++)
 	{
 		/* non-standard sinus */
-		m = sin(((i*2)+1) * M_PI / SIN_LEN); /* checked against the real chip */
+		m = sin(((i * 2) + 1) * M_PI / SIN_LEN); /* checked against the
+		                                          real chip */
 
 		/* we never reach zero here due to ((i*2)+1) */
 
@@ -1656,7 +1658,7 @@ static void OPL3WriteReg(OPL3 *chip, int r, int v)
 	OPL3_CH *CH;
 	unsigned int ch_offset = 0;
 	int slot;
-	int block_fnum;
+	uint32_t block_fnum;
 
 	if (r&0x100)
 	{
@@ -2613,7 +2615,7 @@ void ymf262_update_one(void *_chip, OPL3SAMPLE **buffers, int length)
 {
 	int i;
 	OPL3        *chip  = (OPL3 *)_chip;
-	signed int *chanout = chip->chanout;
+	int32_t *chanout = chip->chanout;
 	uint8_t       rhythm = chip->rhythm&0x20;
 
 	OPL3SAMPLE  *ch_a = buffers[0];

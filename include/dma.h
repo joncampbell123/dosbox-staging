@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,19 +16,25 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_DMA_H
 #define DOSBOX_DMA_H
+
+#include "dosbox.h"
+
+#include <cassert>
+#include <functional>
+
+#include "inout.h"
+#include "support.h"
 
 enum DMAEvent {
 	DMA_REACHED_TC,
 	DMA_MASKED,
 	DMA_UNMASKED,
-//	DMA_TRANSFEREND, this shouldn't really be a ignal
 };
 
 class DmaChannel;
-typedef void (* DMA_CallBack)(DmaChannel * chan,DMAEvent event);
+using DMA_CallBack = std::function<void(DmaChannel *chan, DMAEvent event)>;
 
 class DmaChannel {
 public:
@@ -48,9 +54,11 @@ public:
 	bool request;
 	DMA_CallBack callback;
 
-	DmaChannel(Bit8u num, bool dma16);
+	DmaChannel(uint8_t num, bool dma16);
+
 	void DoCallBack(DMAEvent event) {
-		if (callback)	(*callback)(this,event);
+		if (callback)
+			callback(this, event);
 	}
 	void SetMask(bool _mask) {
 		masked=_mask;
@@ -82,28 +90,39 @@ public:
 
 class DmaController {
 private:
-	Bit8u ctrlnum;
 	bool flipflop;
-	DmaChannel *DmaChannels[4];
+	DmaChannel *dma_channels[4];
+
 public:
 	IO_ReadHandleObject DMA_ReadHandler[0x12];
 	IO_WriteHandleObject DMA_WriteHandler[0x12];
-	DmaController(Bit8u num) {
-		flipflop = false;
-		ctrlnum = num;		/* first or second DMA controller */
-		for(Bit8u i=0;i<4;i++) {
-			DmaChannels[i] = new DmaChannel(i+ctrlnum*4,ctrlnum==1);
-		}
+
+	DmaController(uint8_t ctrl) : flipflop(false)
+	{
+		assert(ctrl == 0 || ctrl == 1); // first or second DMA controller
+		constexpr auto n = ARRAY_LEN(dma_channels);
+		for (uint8_t i = 0; i < n; ++i)
+			dma_channels[i] = new DmaChannel(i + ctrl * n, ctrl == 1);
 	}
-	~DmaController(void) {
-		for(Bit8u i=0;i<4;i++) {
-			delete DmaChannels[i];
-		}
+
+	DmaController(const DmaController &) = delete; // prevent copy
+	DmaController &operator=(const DmaController &) = delete; // prevent assignment
+
+	~DmaController()
+	{
+		for (auto *channel : dma_channels)
+			delete channel;
 	}
-	DmaChannel * GetChannel(Bit8u chan) {
-		if (chan<4) return DmaChannels[chan];
-		else return NULL;
+
+	DmaChannel *GetChannel(uint8_t chan) const
+	{
+		constexpr auto n = ARRAY_LEN(dma_channels);
+		if (chan < n)
+			return dma_channels[chan];
+		else
+			return nullptr;
 	}
+
 	void WriteControllerReg(Bitu reg,Bitu val,Bitu len);
 	Bitu ReadControllerReg(Bitu reg,Bitu len);
 };

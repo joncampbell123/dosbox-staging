@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,19 +16,23 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "hardware.h"
 
+#include <cerrno>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#include "cross.h"
 #include "dosbox.h"
-#include "hardware.h"
-#include "setup.h"
-#include "support.h"
-#include "mem.h"
+#include "fs_utils.h"
 #include "mapper.h"
+#include "mem.h"
 #include "pic.h"
 #include "render.h"
-#include "cross.h"
+#include "setup.h"
+#include "string_utils.h"
+#include "support.h"
 
 #if (C_SSHOT)
 #include <png.h>
@@ -86,21 +90,25 @@ FILE * OpenCaptureFile(const char * type,const char * ext) {
 		return 0;
 	}
 
-	char file_start[16];
-	dir_information * dir;
 	/* Find a filename to open */
-	dir = open_directory(capturedir.c_str());
+	dir_information *dir = open_directory(capturedir.c_str());
 	if (!dir) {
-		//Try creating it first
-		Cross::CreateDir(capturedir);
-		dir=open_directory(capturedir.c_str());
-		if(!dir) {
-		
-			LOG_MSG("Can't open dir %s for capturing %s",capturedir.c_str(),type);
+		// Try creating it first
+		if (create_dir(capturedir.c_str(), 0700, OK_IF_EXISTS) != 0) {
+			LOG_MSG("ERROR: Can't create dir '%s': %s",
+			        capturedir.c_str(), safe_strerror(errno).c_str());
+		}
+
+		dir = open_directory(capturedir.c_str());
+		if (!dir) {
+			LOG_MSG("ERROR: Can't open dir '%s' for capturing %s",
+			        capturedir.c_str(), type);
 			return 0;
 		}
 	}
-	strcpy(file_start,RunningProgram);
+
+	char file_start[16];
+	safe_strcpy(file_start, RunningProgram);
 	lowcase(file_start);
 	strcat(file_start,"_");
 	bool is_directory;
@@ -300,6 +308,30 @@ static void CAPTURE_VideoEvent(bool pressed) {
 }
 #endif
 
+void CAPTURE_VideoStart() {
+#if (C_SSHOT)
+	if (CaptureState & CAPTURE_VIDEO) {
+		LOG_MSG("Already capturing video.");
+	} else {
+		CAPTURE_VideoEvent(true);
+	}
+#else
+	LOG_MSG("Avi capturing has not been compiled in");
+#endif
+}
+
+void CAPTURE_VideoStop() {
+#if (C_SSHOT)
+	if (CaptureState & CAPTURE_VIDEO) {
+		CAPTURE_VideoEvent(true);
+	} else {
+		LOG_MSG("Not capturing video.");
+	}
+#else 
+	LOG_MSG("Avi capturing has not been compiled in");
+#endif
+}
+
 void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags, float fps, Bit8u * data, Bit8u * pal) {
 #if (C_SSHOT)
 	Bitu i;
@@ -367,25 +399,21 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 				PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 		}
 #ifdef PNG_TEXT_SUPPORTED
-		int fields = 1;
-		png_text text[1] = {};
-		const char* text_s = "DOSBox " VERSION;
-		size_t strl = strlen(text_s);
-		char* ptext_s = new char[strl + 1];
-		strcpy(ptext_s, text_s);
-		char software[9] = { 'S','o','f','t','w','a','r','e',0};
-		text[0].compression = PNG_TEXT_COMPRESSION_NONE;
-		text[0].key  = software;
-		text[0].text = ptext_s;
-		png_set_text(png_ptr, info_ptr, text, fields);
+		constexpr char keyword[] = "Software";
+		constexpr char value[] = "dosbox-staging " VERSION;
+		constexpr int num_text = 1;
+		static_assert(sizeof(keyword) < 80, "libpng limit");
+		png_text texts[num_text] = {};
+		texts[0].compression = PNG_TEXT_COMPRESSION_NONE;
+		texts[0].key = const_cast<png_charp>(keyword);
+		texts[0].text = const_cast<png_charp>(value);
+		texts[0].text_length = sizeof(value);
+		png_set_text(png_ptr, info_ptr, texts, num_text);
 #endif
 		png_write_info(png_ptr, info_ptr);
-#ifdef PNG_TEXT_SUPPORTED
-		delete [] ptext_s;
-#endif
 		for (i=0;i<height;i++) {
 			void *rowPointer;
-			uint8_t *srcLine;
+			void *srcLine;
 			if (flags & CAPTURE_FLAG_DBLH)
 				srcLine=(data+(i >> 1)*pitch);
 			else
@@ -396,21 +424,21 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 				if (flags & CAPTURE_FLAG_DBLW) {
    					for (Bitu x=0;x<countWidth;x++)
 						doubleRow[x*2+0] =
-						doubleRow[x*2+1] = srcLine[x];
+						doubleRow[x*2+1] = ((Bit8u *)srcLine)[x];
 					rowPointer = doubleRow;
 				}
 				break;
 			case 15:
 				if (flags & CAPTURE_FLAG_DBLW) {
-					for (Bitu x = 0; x < countWidth; x++) {
-						const Bitu pixel = host_readw_at(srcLine, x);
+					for (Bitu x=0;x<countWidth;x++) {
+						const Bitu pixel = host_to_le(static_cast<uint16_t *>(srcLine)[x]);
 						doubleRow[x*6+0] = doubleRow[x*6+3] = ((pixel& 0x001f) * 0x21) >>  2;
 						doubleRow[x*6+1] = doubleRow[x*6+4] = ((pixel& 0x03e0) * 0x21) >>  7;
 						doubleRow[x*6+2] = doubleRow[x*6+5] = ((pixel& 0x7c00) * 0x21) >>  12;
 					}
 				} else {
-					for (Bitu x = 0; x < countWidth; x++) {
-						const Bitu pixel = host_readw_at(srcLine, x);
+					for (Bitu x=0;x<countWidth;x++) {
+						const Bitu pixel = host_to_le(static_cast<uint16_t *>(srcLine)[x]);
 						doubleRow[x*3+0] = ((pixel& 0x001f) * 0x21) >>  2;
 						doubleRow[x*3+1] = ((pixel& 0x03e0) * 0x21) >>  7;
 						doubleRow[x*3+2] = ((pixel& 0x7c00) * 0x21) >>  12;
@@ -420,15 +448,15 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 				break;
 			case 16:
 				if (flags & CAPTURE_FLAG_DBLW) {
-					for (Bitu x = 0; x < countWidth; x++) {
-						const Bitu pixel = host_readw_at(srcLine, x);
+					for (Bitu x=0;x<countWidth;x++) {
+						const Bitu pixel = host_to_le(static_cast<uint16_t *>(srcLine)[x]);
 						doubleRow[x*6+0] = doubleRow[x*6+3] = ((pixel& 0x001f) * 0x21) >> 2;
 						doubleRow[x*6+1] = doubleRow[x*6+4] = ((pixel& 0x07e0) * 0x41) >> 9;
 						doubleRow[x*6+2] = doubleRow[x*6+5] = ((pixel& 0xf800) * 0x21) >> 13;
 					}
 				} else {
-					for (Bitu x = 0; x < countWidth; x++) {
-						const Bitu pixel = host_readw_at(srcLine, x);
+					for (Bitu x=0;x<countWidth;x++) {
+						const Bitu pixel = host_to_le(static_cast<uint16_t *>(srcLine)[x]);
 						doubleRow[x*3+0] = ((pixel& 0x001f) * 0x21) >>  2;
 						doubleRow[x*3+1] = ((pixel& 0x07e0) * 0x41) >>  9;
 						doubleRow[x*3+2] = ((pixel& 0xf800) * 0x21) >>  13;
@@ -439,15 +467,15 @@ void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags,
 			case 32:
 				if (flags & CAPTURE_FLAG_DBLW) {
 					for (Bitu x=0;x<countWidth;x++) {
-						doubleRow[x*6+0] = doubleRow[x*6+3] = srcLine[x*4+0];
-						doubleRow[x*6+1] = doubleRow[x*6+4] = srcLine[x*4+1];
-						doubleRow[x*6+2] = doubleRow[x*6+5] = srcLine[x*4+2];
+						doubleRow[x*6+0] = doubleRow[x*6+3] = ((Bit8u *)srcLine)[x*4+0];
+						doubleRow[x*6+1] = doubleRow[x*6+4] = ((Bit8u *)srcLine)[x*4+1];
+						doubleRow[x*6+2] = doubleRow[x*6+5] = ((Bit8u *)srcLine)[x*4+2];
 					}
 				} else {
 					for (Bitu x=0;x<countWidth;x++) {
-						doubleRow[x*3+0] = srcLine[x*4+0];
-						doubleRow[x*3+1] = srcLine[x*4+1];
-						doubleRow[x*3+2] = srcLine[x*4+2];
+						doubleRow[x*3+0] = ((Bit8u *)srcLine)[x*4+0];
+						doubleRow[x*3+1] = ((Bit8u *)srcLine)[x*4+1];
+						doubleRow[x*3+2] = ((Bit8u *)srcLine)[x*4+2];
 					}
 				}
 				rowPointer = doubleRow;
@@ -523,7 +551,7 @@ skip_shot:
 		for (i=0;i<height;i++) {
 			void * rowPointer;
 			if (flags & CAPTURE_FLAG_DBLW) {
-				uint8_t *srcLine;
+				void *srcLine;
 				Bitu x;
 				Bitu countWidth = width >> 1;
 				if (flags & CAPTURE_FLAG_DBLH)
@@ -533,23 +561,19 @@ skip_shot:
 				switch ( bpp) {
 				case 8:
 					for (x=0;x<countWidth;x++)
-						doubleRow[x*2+0] =
-						doubleRow[x*2+1] = srcLine[x];
+						((Bit8u *)doubleRow)[x*2+0] =
+						((Bit8u *)doubleRow)[x*2+1] = ((Bit8u *)srcLine)[x];
 					break;
 				case 15:
 				case 16:
-					for (x = 0; x < countWidth; x++) {
-						const uint16_t pixel = host_readw_at(srcLine, x);
-						host_writew_at(doubleRow, x * 2, pixel);
-						host_writew_at(doubleRow, x * 2 + 1, pixel);
-					}
+					for (x=0;x<countWidth;x++)
+						((Bit16u *)doubleRow)[x*2+0] =
+						((Bit16u *)doubleRow)[x*2+1] = ((Bit16u *)srcLine)[x];
 					break;
 				case 32:
-					for (x = 0; x < countWidth; x++) {
-						const uint32_t pixel = host_readd_at(srcLine, x);
-						host_writed_at(doubleRow, x * 2, pixel);
-						host_writed_at(doubleRow, x * 2 + 1, pixel);
-					}
+					for (x=0;x<countWidth;x++)
+						((Bit32u *)doubleRow)[x*2+0] =
+						((Bit32u *)doubleRow)[x*2+1] = ((Bit32u *)srcLine)[x];
 					break;
 				}
                 rowPointer=doubleRow;
@@ -761,11 +785,15 @@ public:
 		Prop_path* proppath= section->Get_path("captures");
 		capturedir = proppath->realpath;
 		CaptureState = 0;
-		MAPPER_AddHandler(CAPTURE_WaveEvent,MK_f6,MMOD1,"recwave","Rec Wave");
-		MAPPER_AddHandler(CAPTURE_MidiEvent,MK_f8,MMOD1|MMOD2,"caprawmidi","Cap MIDI");
+		MAPPER_AddHandler(CAPTURE_WaveEvent, SDL_SCANCODE_F6, MMOD1,
+		                  "recwave", "Rec. Audio");
+		MAPPER_AddHandler(CAPTURE_MidiEvent, SDL_SCANCODE_UNKNOWN, 0,
+		                  "caprawmidi", "Rec. MIDI");
 #if (C_SSHOT)
-		MAPPER_AddHandler(CAPTURE_ScreenShotEvent,MK_f5,MMOD1,"scrshot","Screenshot");
-		MAPPER_AddHandler(CAPTURE_VideoEvent,MK_f5,MMOD1|MMOD2,"video","Video");
+		MAPPER_AddHandler(CAPTURE_ScreenShotEvent, SDL_SCANCODE_F5, MMOD1,
+		                  "scrshot", "Screenshot");
+		MAPPER_AddHandler(CAPTURE_VideoEvent, SDL_SCANCODE_F7, MMOD1,
+		                  "video", "Rec. Video");
 #endif
 	}
 	~HARDWARE(){
@@ -777,13 +805,15 @@ public:
 	}
 };
 
-static HARDWARE* test;
+static HARDWARE *hardware_module;
 
-void HARDWARE_Destroy(Section * sec) {
-	delete test;
+void HARDWARE_Destroy(Section *sec)
+{
+	delete hardware_module;
 }
 
-void HARDWARE_Init(Section * sec) {
-	test = new HARDWARE(sec);
-	sec->AddDestroyFunction(&HARDWARE_Destroy,true);
+void HARDWARE_Init(Section *sec)
+{
+	hardware_module = new HARDWARE(sec);
+	sec->AddDestroyFunction(&HARDWARE_Destroy, true);
 }

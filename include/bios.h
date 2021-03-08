@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,8 @@
 
 #ifndef DOSBOX_BIOS_H
 #define DOSBOX_BIOS_H
+
+#include "dosbox.h"
 
 #define BIOS_BASE_ADDRESS_COM1          0x400
 #define BIOS_BASE_ADDRESS_COM2          0x402
@@ -77,7 +79,7 @@
 #define BIOS_COM3_TIMEOUT               0x47e
 #define BIOS_COM4_TIMEOUT               0x47f
 /* 0x47e is reserved */ //<- why that?
-/* 0x47f-0x4ff is unknow for me */
+/* 0x47f-0x4ff is unknown for me */
 #define BIOS_KEYBOARD_BUFFER_START      0x480
 #define BIOS_KEYBOARD_BUFFER_END        0x482
 

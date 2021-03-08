@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,31 +16,33 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #include "dosbox.h"
 
 #if (C_DYNREC)
 
-#include <assert.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
-#include <stddef.h>
-#include <stdlib.h>
+#include <cassert>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <type_traits>
 
 #if defined (WIN32)
 #include <windows.h>
 #include <winbase.h>
 #endif
 
-#if (C_HAVE_MPROTECT)
+#if defined(HAVE_MPROTECT)
 #include <sys/mman.h>
 
 #include <limits.h>
+
 #ifndef PAGESIZE
 #define PAGESIZE 4096
 #endif
-#endif /* C_HAVE_MPROTECT */
+
+#endif // HAVE_MPROTECT
 
 #include "callback.h"
 #include "regs.h"
@@ -123,22 +125,40 @@ static void IllegalOptionDynrec(const char* msg) {
 	E_Exit("DynrecCore: illegal option in %s",msg);
 }
 
-static struct {
-	BlockReturn (*runcode)(Bit8u*);		// points to code that can start a block
+struct core_dynrec_t {
+	BlockReturn (*runcode)(const Bit8u*);		// points to code that can start a block
 	Bitu callback;				// the occurred callback
 	Bitu readdata;				// spare space used when reading from memory
 	Bit32u protected_regs[8];	// space to save/restore register values
-} core_dynrec;
+};
 
+static core_dynrec_t core_dynrec;
 
-#include "core_dynrec/cache.h"
+// core_dynrec is often being used this way:
+//
+//   function_expecting_int16_ptr((uint16_t*)(&core_dynrec.readdata));
+//
+// These uses are ok and safe as long as core_dynrec.readdata is correctly
+// aligned.
+//
+static_assert(std::is_standard_layout<core_dynrec_t>::value,
+              "core_dynrec_t must be a standard layout type, otherwise "
+              "offsetof calculation is undefined behaviour.");
+static_assert(offsetof(core_dynrec_t, readdata) % sizeof(uint16_t) == 0,
+              "core_dynrec.readdata must be word aligned");
+static_assert(offsetof(core_dynrec_t, readdata) % sizeof(uint32_t) == 0,
+              "core_dynrec.readdata must be double-word aligned");
+
+#include "dyn_cache.h"
 
 #define X86			0x01
 #define X86_64		0x02
 #define MIPSEL		0x03
 #define ARMV4LE		0x04
 #define ARMV7LE		0x05
+#define POWERPC		0x06
 #define ARMV8LE		0x07
+#define PPC64LE		0x08
 
 #if C_TARGETCPU == X86_64
 #include "core_dynrec/risc_x64.h"
@@ -148,17 +168,27 @@ static struct {
 #include "core_dynrec/risc_mipsel32.h"
 #elif (C_TARGETCPU == ARMV4LE) || (C_TARGETCPU == ARMV7LE)
 #include "core_dynrec/risc_armv4le.h"
+#elif C_TARGETCPU == POWERPC
+#include "core_dynrec/risc_ppc.h"
 #elif C_TARGETCPU == ARMV8LE
 #include "core_dynrec/risc_armv8le.h"
+#elif C_TARGETCPU == PPC64LE
+#include "core_dynrec/risc_ppc64le.h"
+#endif
+
+#if !defined(WORDS_BIGENDIAN)
+#define gen_add_LE gen_add
+#define gen_mov_LE_word_to_reg gen_mov_word_to_reg
 #endif
 
 #include "core_dynrec/decoder.h"
 
-CacheBlockDynRec * LinkBlocks(BlockReturn ret) {
-	CacheBlockDynRec * block=NULL;
+CacheBlock *LinkBlocks(BlockReturn ret)
+{
+	CacheBlock *block = NULL;
 	// the last instruction was a control flow modifying instruction
 	Bitu temp_ip=SegPhys(cs)+reg_eip;
-	CodePageHandlerDynRec * temp_handler=(CodePageHandlerDynRec *)get_tlb_readhandler(temp_ip);
+	CodePageHandler *temp_handler = (CodePageHandler *)get_tlb_readhandler(temp_ip);
 	if (temp_handler->flags & (cpu.code.big ? PFLAG_HASCODE32:PFLAG_HASCODE16)) {
 		// see if the target is an already translated block
 		block=temp_handler->FindCacheBlock(temp_ip & 4095);
@@ -185,11 +215,12 @@ Bits CPU_Core_Dynrec_Run(void) {
 	for (;;) {
 		// Determine the linear address of CS:EIP
 		PhysPt ip_point=SegPhys(cs)+reg_eip;
-		#if C_HEAVY_DEBUG
-			if (DEBUG_HeavyIsBreakpoint()) return debugCallback;
-		#endif
+#if C_HEAVY_DEBUG
+		if (DEBUG_HeavyIsBreakpoint())
+			return debugCallback;
+#endif
 
-		CodePageHandlerDynRec * chandler=0;
+		CodePageHandler *chandler = 0;
 		// see if the current page is present and contains code
 		if (GCC_UNLIKELY(MakeCodePage(ip_point,chandler))) {
 			// page not present, throw the exception
@@ -201,7 +232,7 @@ Bits CPU_Core_Dynrec_Run(void) {
 		if (GCC_UNLIKELY(!chandler)) return CPU_Core_Normal_Run();
 
 		// find correct Dynamic Block to run
-		CacheBlockDynRec * block=chandler->FindCacheBlock(ip_point&4095);
+		CacheBlock *block = chandler->FindCacheBlock(ip_point & 4095);
 		if (!block) {
 			// no block found, thus translate the instruction stream
 			// unless the instruction is known to be modified
@@ -273,7 +304,9 @@ run_block:
 		case BR_SMCBlock:
 //			LOG_MSG("selfmodification of running block at %x:%x",SegValue(cs),reg_eip);
 			cpu.exception.which=0;
-			// fallthrough, let the normal core handle the block-modifying instruction
+			// let the normal core handle the block-modifying
+			// instruction
+			FALLTHROUGH;
 		case BR_Opcode:
 			// some instruction has been encountered that could not be translated
 			// (thus it is not part of the code block), the normal core will
@@ -312,7 +345,7 @@ Bits CPU_Core_Dynrec_Trap_Run(void) {
 
 	// trap to int1 unless the last instruction deferred this
 	// (allows hardware interrupts to be served without interaction)
-	if (!cpu.trap_skip) CPU_HW_Interrupt(1);
+	if (!cpu.trap_skip) CPU_DebugException(DBINT_STEP,reg_eip);
 
 	CPU_Cycles = oldCycles-1;
 	// continue (either the trapflag was clear anyways, or the int1 cleared it)

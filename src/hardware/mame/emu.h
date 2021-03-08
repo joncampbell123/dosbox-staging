@@ -1,14 +1,35 @@
-#ifndef DOSBOX_EMU_H
-#define DOSBOX_EMU_H
+/*
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2017-2020  The DOSBox Team
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ */
 
+#ifndef DOSBOX_MAME_EMU_H
+#define DOSBOX_MAME_EMU_H
 
 #include "dosbox.h"
+
+#include <cmath>
 #if defined(_MSC_VER) && (_MSC_VER  <= 1500) 
 #include <SDL.h>
 #else
 #include <stdint.h>
 #endif
-#include <math.h>
 #include <float.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -16,10 +37,6 @@
 #if C_DEBUG
 #include <stdio.h>
 #include <stdarg.h>
-#endif
-
-#ifndef M_PI
-#define M_PI           3.14159265358979323846
 #endif
 
 typedef Bit16s stream_sample_t;
@@ -46,25 +63,29 @@ struct machine_config;
 #define DEFINE_DEVICE_TYPE(Type, Class, ShortName, FullName)		\
 	const device_type Type = 0;
 
-
 class device_sound_interface {
-public:			
+public:
 	struct sound_stream {
-		void update() {
-		}
+		void update() {}
 	};
+
 	sound_stream temp;
 
-	sound_stream* stream_alloc(int whatever, int channels, int size) {
+	device_sound_interface(const machine_config &mconfig, device_t &_device)
+	        : temp()
+	{}
+
+	virtual ~device_sound_interface() = default;
+
+	sound_stream *stream_alloc(int whatever, int channels, int size)
+	{
 		return &temp;
-	};
-	
-
-	virtual void sound_stream_update(sound_stream &stream, stream_sample_t **inputs, stream_sample_t **outputs, int samples) = 0;
-
-	device_sound_interface(const machine_config &mconfig, device_t& _device) {
 	}
 
+	virtual void sound_stream_update(sound_stream &stream,
+	                                 stream_sample_t **inputs,
+	                                 stream_sample_t **outputs,
+	                                 int samples) = 0;
 };
 
 struct attotime {

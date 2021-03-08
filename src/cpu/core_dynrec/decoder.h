@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,8 +16,6 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
-
 #include "decoder_basic.h"
 #include "operators.h"
 #include "decoder_opcodes.h"
@@ -31,7 +29,8 @@
 	instruction is encountered.
 */
 
-static CacheBlockDynRec * CreateCacheBlock(CodePageHandlerDynRec * codepage,PhysPt start,Bitu max_opcodes) {
+static CacheBlock *CreateCacheBlock(CodePageHandler *codepage, PhysPt start, Bitu max_opcodes)
+{
 	// initialize a load of variables
 	decode.code_start=start;
 	decode.code=start;
@@ -48,7 +47,7 @@ static CacheBlockDynRec * CreateCacheBlock(CodePageHandlerDynRec * codepage,Phys
 
 	// every codeblock that is run sets cache.block.running to itself
 	// so the block linking knows the last executed block
-	gen_mov_direct_ptr(&cache.block.running,(DRC_PTR_SIZE_IM)decode.block);
+	gen_mov_direct_ptr(&cache.block.running,(Bitu)decode.block);
 
 	// start with the cycles check
 	gen_mov_word_to_reg(FC_RETOP,&CPU_Cycles,true);
@@ -555,7 +554,7 @@ restart_prefix:
 		case 0xfb:		//STI
 			gen_call_function_raw((void *)&CPU_STI);
 			dyn_check_exception(FC_RETOP);
-			if (max_opcodes<=0) max_opcodes=1;		//Allow 1 extra opcode
+			max_opcodes=1;		//Allow 1 extra opcode
 			break;
 
 		case 0xfc:		//CLD
@@ -591,7 +590,7 @@ restart_prefix:
 	// link to next block because the maximum number of opcodes has been reached
 	dyn_set_eip_end();
 	dyn_reduce_cycles();
-	gen_jmp_ptr(&decode.block->link[0].to,offsetof(CacheBlockDynRec,cache.start));
+	gen_jmp_ptr(&decode.block->link[0].to, offsetof(CacheBlock, cache.start));
 	dyn_closeblock();
     goto finish_block;
 core_close_block:

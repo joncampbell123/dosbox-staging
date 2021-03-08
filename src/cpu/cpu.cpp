@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,12 +16,12 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "cpu.h"
 
 #include <assert.h>
 #include <sstream>
 #include <stddef.h>
-#include "dosbox.h"
-#include "cpu.h"
+
 #include "memory.h"
 #include "debug.h"
 #include "mapper.h"
@@ -274,15 +274,12 @@ void CPU_CheckSegments(void) {
 	if (needs_invalidation) CPU_SetSegGeneral(gs,0);
 }
 
-
 class TaskStateSegment {
 public:
-	TaskStateSegment() {
-		valid=false;
-	}
-	bool IsValid(void) {
-		return valid;
-	}
+	TaskStateSegment() = default;
+
+	bool IsValid() const { return valid; }
+
 	Bitu Get_back(void) {
 		cpu.mpl=0;
 		Bit16u backlink=mem_readw(base);
@@ -331,12 +328,13 @@ public:
 		is386=desc.Is386();
 		return true;
 	}
-	TSS_Descriptor desc;
-	Bitu selector;
-	PhysPt base;
-	Bitu limit;
-	Bitu is386;
-	bool valid;
+
+	TSS_Descriptor desc = {};
+	Bitu selector = 0;
+	PhysPt base = 0;
+	Bitu limit = 0;
+	Bitu is386 = 0;
+	bool valid = false;
 };
 
 TaskStateSegment cpu_tss;
@@ -540,6 +538,11 @@ doexception:
 	return CPU_PrepareException(EXCEPTION_GP,0);
 }
 
+void CPU_DebugException(Bit32u triggers,Bitu oldeip) {
+	cpu.drx[6] = (cpu.drx[6] & 0xFFFF1FF0) | triggers;
+	CPU_Interrupt(EXCEPTION_DB,CPU_INT_EXCEPTION,oldeip);
+}
+
 void CPU_Exception(Bitu which,Bitu error ) {
 //	LOG_MSG("Exception %d error %x",which,error);
 	cpu.exception.error=error;
@@ -548,6 +551,10 @@ void CPU_Exception(Bitu which,Bitu error ) {
 
 Bit8u lastint;
 void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
+	if (num == EXCEPTION_DB && (type&CPU_INT_EXCEPTION) == 0) {
+		CPU_DebugException(0,oldeip); // DR6 bits need updating
+		return;
+	}
 	lastint=num;
 	FillFlags();
 #if C_DEBUG
@@ -593,7 +600,7 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 		Descriptor gate;
 		if (!cpu.idt.GetDescriptor(num<<3,gate)) {
 			// zone66
-			CPU_Exception(EXCEPTION_GP,num*8+2+(type&CPU_INT_SOFTWARE)?0:1);
+			CPU_Exception(EXCEPTION_GP,num*8+2+((type&CPU_INT_SOFTWARE)?0:1));
 			return;
 		}
 
@@ -610,7 +617,7 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 			{
 				CPU_CHECK_COND(!gate.saved.seg.p,
 					"INT:Gate segment not present",
-					EXCEPTION_NP,num*8+2+(type&CPU_INT_SOFTWARE)?0:1)
+					EXCEPTION_NP,num*8+2+((type&CPU_INT_SOFTWARE)?0:1))
 
 				Descriptor cs_desc;
 				Bitu gate_sel=gate.GetSelector();
@@ -620,12 +627,12 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 					EXCEPTION_GP,(type&CPU_INT_SOFTWARE)?0:1)
 				CPU_CHECK_COND(!cpu.gdt.GetDescriptor(gate_sel,cs_desc),
 					"INT:Gate with CS beyond limit",
-					EXCEPTION_GP,(gate_sel & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+					EXCEPTION_GP,(gate_sel & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 
 				Bitu cs_dpl=cs_desc.DPL();
 				CPU_CHECK_COND(cs_dpl>cpu.cpl,
 					"Interrupt to higher privilege",
-					EXCEPTION_GP,(gate_sel & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+					EXCEPTION_GP,(gate_sel & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 				switch (cs_desc.Type()) {
 				case DESC_CODE_N_NC_A:	case DESC_CODE_N_NC_NA:
 				case DESC_CODE_R_NC_A:	case DESC_CODE_R_NC_NA:
@@ -633,7 +640,7 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 						/* Prepare for gate to inner level */
 						CPU_CHECK_COND(!cs_desc.saved.seg.p,
 							"INT:Inner level:CS segment not present",
-							EXCEPTION_NP,(gate_sel & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+							EXCEPTION_NP,(gate_sel & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 						CPU_CHECK_COND((reg_flags & FLAG_VM) && (cs_dpl!=0),
 							"V86 interrupt calling codesegment with DPL>0",
 							EXCEPTION_GP,gate_sel & 0xfffc)
@@ -649,10 +656,10 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 						Descriptor n_ss_desc;
 						CPU_CHECK_COND(!cpu.gdt.GetDescriptor(n_ss,n_ss_desc),
 							"INT:Gate with SS beyond limit",
-							EXCEPTION_TS,(n_ss & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+							EXCEPTION_TS,(n_ss & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 						CPU_CHECK_COND(((n_ss & 3)!=cs_dpl) || (n_ss_desc.DPL()!=cs_dpl),
 							"INT:Inner level with CS_DPL!=SS_DPL and SS_RPL",
-							EXCEPTION_TS,(n_ss & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+							EXCEPTION_TS,(n_ss & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 
 						// check if stack segment is a writable data segment
 						switch (n_ss_desc.Type()) {
@@ -664,7 +671,7 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 						}
 						CPU_CHECK_COND(!n_ss_desc.saved.seg.p,
 							"INT:Inner level with nonpresent SS",
-							EXCEPTION_SS,(n_ss & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+							EXCEPTION_SS,(n_ss & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 
 						// commit point
 						Segs.phys[ss]=n_ss_desc.GetBase();
@@ -706,7 +713,7 @@ void CPU_Interrupt(Bitu num,Bitu type,Bitu oldeip) {
 					/* Prepare stack for gate to same priviledge */
 					CPU_CHECK_COND(!cs_desc.saved.seg.p,
 							"INT:Same level:CS segment not present",
-						EXCEPTION_NP,(gate_sel & 0xfffc)+(type&CPU_INT_SOFTWARE)?0:1)
+						EXCEPTION_NP,(gate_sel & 0xfffc)+((type&CPU_INT_SOFTWARE)?0:1))
 					if ((reg_flags & FLAG_VM) && (cs_dpl<cpu.cpl))
 						E_Exit("V86 interrupt doesn't change to pl0");	// or #GP(cs_sel)
 
@@ -745,7 +752,7 @@ do_interrupt:
 		case DESC_TASK_GATE:
 			CPU_CHECK_COND(!gate.saved.seg.p,
 				"INT:Gate segment not present",
-				EXCEPTION_NP,num*8+2+(type&CPU_INT_SOFTWARE)?0:1)
+				EXCEPTION_NP,num*8+2+((type&CPU_INT_SOFTWARE)?0:1))
 
 			CPU_SwitchTask(gate.GetSelector(),TSwitch_CALL_INT,oldeip);
 			if (type & CPU_INT_HAS_ERROR) {
@@ -1758,97 +1765,76 @@ void CPU_ARPL(Bitu & dest_sel,Bitu src_sel) {
 	
 void CPU_LAR(Bitu selector,Bitu & ar) {
 	FillFlags();
-	if (selector == 0) {
-		SETFLAGBIT(ZF,false);
-		return;
-	}
-	Descriptor desc;Bitu rpl=selector & 3;
-	if (!cpu.gdt.GetDescriptor(selector,desc)){
-		SETFLAGBIT(ZF,false);
-		return;
-	}
-	switch (desc.Type()){
-	case DESC_CODE_N_C_A:	case DESC_CODE_N_C_NA:
-	case DESC_CODE_R_C_A:	case DESC_CODE_R_C_NA:
-		break;
+	if (selector & 0xfffc) {
+		Descriptor desc;
+		Bitu rpl=selector & 3;
+		if (cpu.gdt.GetDescriptor(selector,desc)) {
+			switch (desc.Type()) {
+				case DESC_LDT:
+				case DESC_TASK_GATE:
 
-	case DESC_286_INT_GATE:		case DESC_286_TRAP_GATE:	{
-	case DESC_386_INT_GATE:		case DESC_386_TRAP_GATE:
-		SETFLAGBIT(ZF,false);
-		return;
-	}
+				case DESC_286_TSS_A:		case DESC_286_TSS_B:
+				case DESC_286_CALL_GATE:
 
-	case DESC_LDT:
-	case DESC_TASK_GATE:
+				case DESC_386_TSS_A:		case DESC_386_TSS_B:
+				case DESC_386_CALL_GATE:
 
-	case DESC_286_TSS_A:		case DESC_286_TSS_B:
-	case DESC_286_CALL_GATE:
+				case DESC_DATA_EU_RO_NA:	case DESC_DATA_EU_RO_A:
+				case DESC_DATA_EU_RW_NA:	case DESC_DATA_EU_RW_A:
+				case DESC_DATA_ED_RO_NA:	case DESC_DATA_ED_RO_A:
+				case DESC_DATA_ED_RW_NA:	case DESC_DATA_ED_RW_A:
+				case DESC_CODE_N_NC_A:		case DESC_CODE_N_NC_NA:
+				case DESC_CODE_R_NC_A:		case DESC_CODE_R_NC_NA:
+					if (desc.DPL()<cpu.cpl || desc.DPL()<rpl)
+						break;
 
-	case DESC_386_TSS_A:		case DESC_386_TSS_B:
-	case DESC_386_CALL_GATE:
-	
-
-	case DESC_DATA_EU_RO_NA:	case DESC_DATA_EU_RO_A:
-	case DESC_DATA_EU_RW_NA:	case DESC_DATA_EU_RW_A:
-	case DESC_DATA_ED_RO_NA:	case DESC_DATA_ED_RO_A:
-	case DESC_DATA_ED_RW_NA:	case DESC_DATA_ED_RW_A:
-	case DESC_CODE_N_NC_A:		case DESC_CODE_N_NC_NA:
-	case DESC_CODE_R_NC_A:		case DESC_CODE_R_NC_NA:
-		if (desc.DPL()<cpu.cpl || desc.DPL() < rpl) {
-			SETFLAGBIT(ZF,false);
-			return;
+				case DESC_CODE_N_C_A:	case DESC_CODE_N_C_NA:
+				case DESC_CODE_R_C_A:	case DESC_CODE_R_C_NA:
+					/* Valid descriptor */
+					ar=desc.saved.fill[1] & 0x00ffff00;
+					SETFLAGBIT(ZF,true);
+					return;
+			}
 		}
-		break;
-	default:
-		SETFLAGBIT(ZF,false);
-		return;
 	}
-	/* Valid descriptor */
-	ar=desc.saved.fill[1] & 0x00ffff00;
-	SETFLAGBIT(ZF,true);
+
+	SETFLAGBIT(ZF,false);
 }
 
 void CPU_LSL(Bitu selector,Bitu & limit) {
 	FillFlags();
-	if (selector == 0) {
-		SETFLAGBIT(ZF,false);
-		return;
-	}
-	Descriptor desc;Bitu rpl=selector & 3;
-	if (!cpu.gdt.GetDescriptor(selector,desc)){
-		SETFLAGBIT(ZF,false);
-		return;
-	}
-	switch (desc.Type()){
-	case DESC_CODE_N_C_A:	case DESC_CODE_N_C_NA:
-	case DESC_CODE_R_C_A:	case DESC_CODE_R_C_NA:
-		break;
+	if (selector & 0xfffc) {
+		Descriptor desc;
+		Bitu rpl=selector & 3;
+		if (cpu.gdt.GetDescriptor(selector,desc)) {
+			switch (desc.Type()) {
+				case DESC_LDT:
+				case DESC_286_TSS_A:
+				case DESC_286_TSS_B:
 
-	case DESC_LDT:
-	case DESC_286_TSS_A:
-	case DESC_286_TSS_B:
-	
-	case DESC_386_TSS_A:
-	case DESC_386_TSS_B:
+				case DESC_386_TSS_A:
+				case DESC_386_TSS_B:
 
-	case DESC_DATA_EU_RO_NA:	case DESC_DATA_EU_RO_A:
-	case DESC_DATA_EU_RW_NA:	case DESC_DATA_EU_RW_A:
-	case DESC_DATA_ED_RO_NA:	case DESC_DATA_ED_RO_A:
-	case DESC_DATA_ED_RW_NA:	case DESC_DATA_ED_RW_A:
-	
-	case DESC_CODE_N_NC_A:		case DESC_CODE_N_NC_NA:
-	case DESC_CODE_R_NC_A:		case DESC_CODE_R_NC_NA:
-		if (desc.DPL()<cpu.cpl || desc.DPL() < rpl) {
-			SETFLAGBIT(ZF,false);
-			return;
+				case DESC_DATA_EU_RO_NA:	case DESC_DATA_EU_RO_A:
+				case DESC_DATA_EU_RW_NA:	case DESC_DATA_EU_RW_A:
+				case DESC_DATA_ED_RO_NA:	case DESC_DATA_ED_RO_A:
+				case DESC_DATA_ED_RW_NA:	case DESC_DATA_ED_RW_A:
+
+				case DESC_CODE_N_NC_A:		case DESC_CODE_N_NC_NA:
+				case DESC_CODE_R_NC_A:		case DESC_CODE_R_NC_NA:
+					if (desc.DPL()<cpu.cpl || desc.DPL()<rpl)
+						break;
+
+				case DESC_CODE_N_C_A:	case DESC_CODE_N_C_NA:
+				case DESC_CODE_R_C_A:	case DESC_CODE_R_C_NA:
+					limit=desc.GetLimit();
+					SETFLAGBIT(ZF,true);
+					return;
+			}
 		}
-		break;
-	default:
-		SETFLAGBIT(ZF,false);
-		return;
 	}
-	limit=desc.GetLimit();
-	SETFLAGBIT(ZF,true);
+
+	SETFLAGBIT(ZF,false);
 }
 
 void CPU_VERR(Bitu selector) {
@@ -2023,18 +2009,31 @@ bool CPU_CPUID(void) {
 		reg_edx='i' | ('n' << 8) | ('e' << 16) | ('I'<< 24); 
 		reg_ecx='n' | ('t' << 8) | ('e' << 16) | ('l'<< 24); 
 		break;
-	case 1:	/* get processor type/family/model/stepping and feature flags */
-		if ((CPU_ArchitectureType==CPU_ARCHTYPE_486NEWSLOW) ||
-			(CPU_ArchitectureType==CPU_ARCHTYPE_MIXED)) {
-			reg_eax=0x402;		/* intel 486dx */
-			reg_ebx=0;			/* Not Supported */
-			reg_ecx=0;			/* No features */
-			reg_edx=0x00000001;	/* FPU */
-		} else if (CPU_ArchitectureType==CPU_ARCHTYPE_PENTIUMSLOW) {
-			reg_eax=0x513;		/* intel pentium */
-			reg_ebx=0;			/* Not Supported */
-			reg_ecx=0;			/* No features */
-			reg_edx=0x00000011;	/* FPU+TimeStamp/RDTSC */
+	case 1: // Get processor type/family/model/stepping and feature flags
+		if ((CPU_ArchitectureType == CPU_ARCHTYPE_486NEWSLOW) ||
+		    (CPU_ArchitectureType == CPU_ARCHTYPE_MIXED)) {
+#if (C_FPU)
+			reg_eax = 0x402; // Intel 486DX
+			reg_edx = 0x1;   // FPU
+#else
+			reg_eax = 0x422; // Intel 486SX
+			reg_edx = 0x0;   // no FPU
+#endif
+			reg_ebx = 0;     // Not supported
+			reg_ecx = 0;     // No features
+		} else if (CPU_ArchitectureType == CPU_ARCHTYPE_PENTIUMSLOW) {
+#if (C_FPU)
+			reg_eax = 0x517; // Intel Pentium P5 60/66 MHz D1-step
+			reg_edx = 0x11;  // FPU + Time Stamp Counter (RDTSC)
+#else
+			// All Pentiums had FPU built-in, so when FPU is
+			// disabled, we pretend to have early Pentium model with
+			// FDIV bug present.
+			reg_eax = 0x513; // Intel Pentium P5 60/66 MHz B1-step
+			reg_edx = 0x10;  // Time Stamp Counter (RDTSC)
+#endif
+			reg_ebx = 0;     // Not supported
+			reg_ecx = 0;     // No features
 		} else {
 			return false;
 		}
@@ -2233,12 +2232,18 @@ public:
 #elif (C_DYNREC)
 		CPU_Core_Dynrec_Init();
 #endif
-		MAPPER_AddHandler(CPU_CycleDecrease,MK_f11,MMOD1,"cycledown","Dec Cycles");
-		MAPPER_AddHandler(CPU_CycleIncrease,MK_f12,MMOD1,"cycleup"  ,"Inc Cycles");
+		MAPPER_AddHandler(CPU_CycleDecrease, SDL_SCANCODE_F11, MMOD1,
+		                  "cycledown", "Dec Cycles");
+		MAPPER_AddHandler(CPU_CycleIncrease, SDL_SCANCODE_F12, MMOD1,
+		                  "cycleup", "Inc Cycles");
 		Change_Config(configuration);	
 		CPU_JMP(false,0,0,0);					//Setup the first cpu core
 	}
-	bool Change_Config(Section* newconfig){
+
+	~CPU() override = default;
+
+	bool Change_Config(Section *newconfig) override
+	{
 		Section_prop * section=static_cast<Section_prop *>(newconfig);
 		CPU_AutoDetermineMode=CPU_AUTODETERMINE_NONE;
 		//CPU_CycleLeft=0;//needed ?
@@ -2408,9 +2413,8 @@ public:
 		else GFX_SetTitle(CPU_CycleMax,-1,false);
 		return true;
 	}
-	~CPU(){ /* empty */};
 };
-	
+
 static CPU * test;
 
 void CPU_ShutDown(Section* sec) {

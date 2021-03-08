@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,9 +18,9 @@
 
 #include "drives.h"
 
-#include "support.h"
+#include "string_utils.h"
 
-bool WildFileCmp(const char * file, const char * wild) 
+bool WildFileCmp(const char *file, const char *wild)
 {
 	char file_name[9];
 	char file_ext[4];
@@ -40,9 +40,9 @@ bool WildFileCmp(const char * file, const char * wild)
 		if (size>8) size=8;
 		memcpy(file_name,file,size);
 		find_ext++;
-		memcpy(file_ext,find_ext,(strlen(find_ext)>3) ? 3 : strlen(find_ext)); 
+		memcpy(file_ext, find_ext, strnlen(find_ext, 3));
 	} else {
-		memcpy(file_name,file,(strlen(file) > 8) ? 8 : strlen(file));
+		memcpy(file_name, file, strnlen(file, 8));
 	}
 	upcase(file_name);upcase(file_ext);
 	find_ext=strrchr(wild,'.');
@@ -51,9 +51,9 @@ bool WildFileCmp(const char * file, const char * wild)
 		if (size>8) size=8;
 		memcpy(wild_name,wild,size);
 		find_ext++;
-		memcpy(wild_ext,find_ext,(strlen(find_ext)>3) ? 3 : strlen(find_ext));
+		memcpy(wild_ext, find_ext, strnlen(find_ext, 3));
 	} else {
-		memcpy(wild_name,wild,(strlen(wild) > 8) ? 8 : strlen(wild));
+		memcpy(wild_name, wild, strnlen(wild, 8));
 	}
 	upcase(wild_name);upcase(wild_ext);
 	/* Names are right do some checking */
@@ -73,7 +73,13 @@ checkext:
 	return true;
 }
 
-
+// TODO Right now label formatting seems to be a bit of mess, with various
+// places in code setting/expecting different format, so simple GetLabel() on
+// a drive object might not yield an expected result. Not sure how to sort it
+// out, but it will require some attention to detail.
+// Also: this function is too strict - it removes all punctuation when *some*
+// punctuation is acceptable in drive labels (e.g. '_' or '-').
+//
 std::string To_Label(const char* name) {
 	// Reformat the name per the DOS label specification:
 	// - Upper-case, up to 11 ASCII characters
@@ -121,6 +127,11 @@ DOS_Drive::DOS_Drive()
 {
 	curdir[0] = '\0';
 	info[0] = '\0';
+}
+
+void DOS_Drive::SetDir(const char *path)
+{
+	safe_strcpy(curdir, path);
 }
 
 // static members variables
@@ -226,9 +237,11 @@ void DriveManager::Init(Section* /* sec */) {
 	for(int i = 0; i < DOS_DRIVES; i++) {
 		driveInfos[i].currentDisk = 0;
 	}
-	
-//	MAPPER_AddHandler(&CycleDisk, MK_f3, MMOD1, "cycledisk", "Cycle Disk");
-//	MAPPER_AddHandler(&CycleDrive, MK_f3, MMOD2, "cycledrive", "Cycle Drv");
+
+	// MAPPER_AddHandler(&CycleDisk, SDL_SCANCODE_F3, MMOD1,
+	//                   "cycledisk", "Cycle Disk");
+	// MAPPER_AddHandler(&CycleDrive, SDL_SCANCODE_F3, MMOD2,
+	//                   "cycledrive", "Cycle Drv");
 }
 
 void DRIVES_Init(Section* sec) {

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@
 #include "serialport.h"
 #include <time.h>
 
-#if defined(DB_HAVE_CLOCK_GETTIME) && ! defined(WIN32)
+#if defined(HAVE_CLOCK_GETTIME) && !defined(WIN32)
 //time.h is already included
 #else
 #include <sys/timeb.h>
@@ -494,10 +494,12 @@ static Bitu INT11_Handler(void) {
 
 static void BIOS_HostTimeSync() {
 	Bit32u milli = 0;
-#if defined(DB_HAVE_CLOCK_GETTIME) && ! defined(WIN32)
+	// TODO investigate if clock_gettime and ftime can be replaced
+	// by using C++11 chrono
+#if defined(HAVE_CLOCK_GETTIME) && !defined(WIN32)
 	struct timespec tp;
 	clock_gettime(CLOCK_REALTIME,&tp);
-	
+
 	struct tm *loctime;
 	loctime = localtime(&tp.tv_sec);
 	milli = (Bit32u) (tp.tv_nsec / 1000000);
@@ -505,7 +507,7 @@ static void BIOS_HostTimeSync() {
 	/* Setup time and date */
 	struct timeb timebuffer;
 	ftime(&timebuffer);
-	
+
 	struct tm *loctime;
 	loctime = localtime (&timebuffer.time);
 	milli = (Bit32u) timebuffer.millitm;
@@ -824,13 +826,24 @@ static Bitu INT15_Handler(void) {
 				break;
 			}
 			Bit32u count=(reg_cx<<16)|reg_dx;
+			double timeout=PIC_FullIndex()+((double)count/1000.0)+1.0;
 			mem_writed(BIOS_WAIT_FLAG_POINTER,RealMake(0,BIOS_WAIT_FLAG_TEMP));
 			mem_writed(BIOS_WAIT_FLAG_COUNT,count);
 			mem_writeb(BIOS_WAIT_FLAG_ACTIVE,1);
+			/* Unmask IRQ 8 if masked */
+			Bit8u mask=IO_Read(0xa1);
+			if (mask&1) IO_Write(0xa1,mask&~1);
 			/* Reprogram RTC to start */
 			IO_Write(0x70,0xb);
 			IO_Write(0x71,IO_Read(0x71)|0x40);
 			while (mem_readd(BIOS_WAIT_FLAG_COUNT)) {
+				if (PIC_FullIndex()>timeout) {
+					/* RTC timer not working for some reason */
+					mem_writeb(BIOS_WAIT_FLAG_ACTIVE,0);
+					IO_Write(0x70,0xb);
+					IO_Write(0x71,IO_Read(0x71)&~0x40);
+					break;
+				}
 				CALLBACK_Idle();
 			}
 			CALLBACK_SCF(false);
@@ -901,9 +914,9 @@ static Bitu INT15_Handler(void) {
 				reg_ah=1;
 			}
 			break;
-		case 0x01:		// reset
-			reg_bx=0x00aa;	// mouse
-			// fall through
+		case 0x01:               // reset
+			reg_bx = 0x00aa; // mouse
+			FALLTHROUGH;
 		case 0x05:		// initialize
 			if ((reg_al==0x05) && (reg_bh!=0x03)) {
 				// non-standard data packet sizes not supported

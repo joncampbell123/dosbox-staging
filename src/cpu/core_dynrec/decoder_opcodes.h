@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,8 +16,6 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
-
 /*
 	The functions in this file are called almost exclusively by	decoder.h,
 	they translate an (or a set of) instruction(s) into hostspecific code
@@ -28,6 +26,8 @@
 	(see operators.h). Parameter loading and result writeback is done
 	according to the instruction.
 */
+
+#include "compiler.h"
 
 static void dyn_dop_ebgb(DualOps op) {
 	dyn_get_modrm();
@@ -82,9 +82,11 @@ static void dyn_dop_ebgb_xchg(void) {
 		dyn_read_byte(FC_ADDR,FC_TMP_BA1);
 		MOV_REG_BYTE_TO_HOST_REG_LOW(FC_TMP_BA2,decode.modrm.reg&3,(decode.modrm.reg>>2)&1);
 
-		MOV_REG_BYTE_FROM_HOST_REG_LOW(FC_TMP_BA1,decode.modrm.reg&3,(decode.modrm.reg>>2)&1);
+		gen_protect_reg(FC_TMP_BA1);
 		gen_restore_addr_reg();
 		dyn_write_byte(FC_ADDR,FC_TMP_BA2);
+		gen_restore_reg(FC_TMP_BA1);
+		MOV_REG_BYTE_FROM_HOST_REG_LOW(FC_TMP_BA1,decode.modrm.reg&3,(decode.modrm.reg>>2)&1);
 	} else {
 		MOV_REG_BYTE_TO_HOST_REG_LOW(FC_TMP_BA1,decode.modrm.rm&3,(decode.modrm.rm>>2)&1);
 		MOV_REG_BYTE_TO_HOST_REG_LOW(FC_TMP_BA2,decode.modrm.reg&3,(decode.modrm.reg>>2)&1);
@@ -250,12 +252,12 @@ static void dyn_prep_word_imm(Bit8u reg) {
 	Bitu val;
 	if (decode.big_op) {
 		if (decode_fetchd_imm(val)) {
-			gen_mov_word_to_reg(FC_OP2,(void*)val,true);
+			gen_mov_LE_word_to_reg(FC_OP2,(void*)val,true);
 			return;
 		}
 	} else {
 		if (decode_fetchw_imm(val)) {
-			gen_mov_word_to_reg(FC_OP2,(void*)val,false);
+			gen_mov_LE_word_to_reg(FC_OP2,(void*)val,false);
 			return;
 		}
 	}
@@ -287,13 +289,13 @@ static void dyn_mov_word_imm(Bit8u reg) {
 	Bitu val;
 	if (decode.big_op) {
 		if (decode_fetchd_imm(val)) {
-			gen_mov_word_to_reg(FC_OP1,(void*)val,true);
+			gen_mov_LE_word_to_reg(FC_OP1,(void*)val,true);
 			MOV_REG_WORD32_FROM_HOST_REG(FC_OP1,reg);
 			return;
 		}
 	} else {
 		if (decode_fetchw_imm(val)) {
-			gen_mov_word_to_reg(FC_OP1,(void*)val,false);
+			gen_mov_LE_word_to_reg(FC_OP1,(void*)val,false);
 			MOV_REG_WORD16_FROM_HOST_REG(FC_OP1,reg);
 			return;
 		}
@@ -330,7 +332,7 @@ static void dyn_mov_byte_direct_al() {
 	if (decode.big_addr) {
 		Bitu val;
 		if (decode_fetchd_imm(val)) {
-			gen_add(FC_ADDR,(void*)val);
+			gen_add_LE(FC_ADDR,(void*)val);
 		} else {
 			gen_add_imm(FC_ADDR,(Bit32u)val);
 		}
@@ -455,7 +457,7 @@ static void dyn_pop_ev(void) {
 		if (decode.big_op) gen_call_function_raw((void *)&mem_writed_checked_drc);
 		else gen_call_function_raw((void *)&mem_writew_checked_drc);
 		gen_extend_byte(false,FC_RETOP); // bool -> dword
-		DRC_PTR_SIZE_IM no_fault = gen_create_branch_on_zero(FC_RETOP, true);
+		const Bit8u* no_fault = gen_create_branch_on_zero(FC_RETOP, true);
 		// restore original ESP
 		gen_restore_reg(FC_OP2);
 		MOV_REG_WORD32_FROM_HOST_REG(FC_OP2,DRC_REG_ESP);
@@ -1036,7 +1038,7 @@ static void dyn_larlsl(bool is_lar) {
 	gen_extend_word(false,FC_RETOP);
 	if (is_lar) gen_call_function((void*)CPU_LAR,"%R%A",FC_RETOP,(DRC_PTR_SIZE_IM)&core_dynrec.readdata);
 	else gen_call_function((void*)CPU_LSL,"%R%A",FC_RETOP,(DRC_PTR_SIZE_IM)&core_dynrec.readdata);
-	DRC_PTR_SIZE_IM brnz=gen_create_branch_on_nonzero(FC_RETOP,true);
+	const Bit8u* brnz=gen_create_branch_on_nonzero(FC_RETOP,true);
 	gen_mov_word_to_reg(FC_OP2,&core_dynrec.readdata,true);
 	MOV_REG_WORD_FROM_HOST_REG(FC_OP2,decode.modrm.reg,decode.big_op);
 	gen_fill_branch(brnz);
@@ -1046,7 +1048,7 @@ static void dyn_larlsl(bool is_lar) {
 
 static void dyn_mov_from_crx(void) {
 	dyn_get_modrm();
-	gen_call_function_IA((void*)CPU_READ_CRX,decode.modrm.reg,(DRC_PTR_SIZE_IM)&core_dynrec.readdata);
+	gen_call_function_IA((void*)CPU_READ_CRX,decode.modrm.reg,(Bitu)&core_dynrec.readdata);
 	dyn_check_exception(FC_RETOP);
 	gen_mov_word_to_reg(FC_OP2,&core_dynrec.readdata,true);
 	MOV_REG_WORD32_FROM_HOST_REG(FC_OP2,decode.modrm.rm);
@@ -1097,7 +1099,7 @@ static void dyn_sahf(void) {
 static void dyn_exit_link(Bits eip_change) {
 	gen_add_direct_word(&reg_eip,(decode.code-decode.code_start)+eip_change,decode.big_op);
 	dyn_reduce_cycles();
-	gen_jmp_ptr(&decode.block->link[0].to,offsetof(CacheBlockDynRec,cache.start));
+	gen_jmp_ptr(&decode.block->link[0].to, offsetof(CacheBlock, cache.start));
 	dyn_closeblock();
 }
 
@@ -1107,17 +1109,17 @@ static void dyn_branched_exit(BranchTypes btype,Bit32s eip_add) {
 	dyn_reduce_cycles();
 
 	dyn_branchflag_to_reg(btype);
-	DRC_PTR_SIZE_IM data=gen_create_branch_on_nonzero(FC_RETOP,true);
+	const Bit8u* data=gen_create_branch_on_nonzero(FC_RETOP,true);
 
  	// Branch not taken
 	gen_add_direct_word(&reg_eip,eip_base,decode.big_op);
- 	gen_jmp_ptr(&decode.block->link[0].to,offsetof(CacheBlockDynRec,cache.start));
- 	gen_fill_branch(data);
+	gen_jmp_ptr(&decode.block->link[0].to, offsetof(CacheBlock, cache.start));
+	gen_fill_branch(data);
 
  	// Branch taken
 	gen_add_direct_word(&reg_eip,eip_base+eip_add,decode.big_op);
- 	gen_jmp_ptr(&decode.block->link[1].to,offsetof(CacheBlockDynRec,cache.start));
- 	dyn_closeblock();
+	gen_jmp_ptr(&decode.block->link[1].to, offsetof(CacheBlock, cache.start));
+	dyn_closeblock();
 }
 
 /*
@@ -1138,8 +1140,8 @@ static void dyn_loop(LoopTypes type) {
 	dyn_reduce_cycles();
 	Bits eip_add=(Bit8s)decode_fetchb();
 	Bitu eip_base=decode.code-decode.code_start;
-	DRC_PTR_SIZE_IM branch1=0;
-	DRC_PTR_SIZE_IM branch2=0;
+	const Bit8u* branch1=0;
+	const Bit8u* branch2=0;
 	switch (type) {
 	case LOOP_E:
 		dyn_branchflag_to_reg(BR_NZ);
@@ -1148,6 +1150,9 @@ static void dyn_loop(LoopTypes type) {
 	case LOOP_NE:
 		dyn_branchflag_to_reg(BR_Z);
 		branch1=gen_create_branch_on_nonzero(FC_RETOP,true);
+		break;
+	case LOOP_NONE:
+	case LOOP_JCXZ:
 		break;
 	}
 	switch (type) {
@@ -1165,7 +1170,7 @@ static void dyn_loop(LoopTypes type) {
 		break;
 	}
 	gen_add_direct_word(&reg_eip,eip_base+eip_add,true);
-	gen_jmp_ptr(&decode.block->link[0].to,offsetof(CacheBlockDynRec,cache.start));
+	gen_jmp_ptr(&decode.block->link[0].to, offsetof(CacheBlock, cache.start));
 	if (branch1) {
 		gen_fill_branch(branch1);
 		MOV_REG_WORD_TO_HOST_REG(FC_OP1,DRC_REG_ECX,decode.big_addr);
@@ -1175,7 +1180,7 @@ static void dyn_loop(LoopTypes type) {
 	// Branch taken
 	gen_fill_branch(branch2);
 	gen_add_direct_word(&reg_eip,eip_base,decode.big_op);
-	gen_jmp_ptr(&decode.block->link[1].to,offsetof(CacheBlockDynRec,cache.start));
+	gen_jmp_ptr(&decode.block->link[1].to, offsetof(CacheBlock, cache.start));
 	dyn_closeblock();
 }
 
@@ -1184,11 +1189,8 @@ static void dyn_ret_near(Bitu bytes) {
 	dyn_reduce_cycles();
 
 	if (decode.big_op) gen_call_function_raw((void*)&dynrec_pop_dword);
-	else {
-		gen_call_function_raw((void*)&dynrec_pop_word);
-		gen_extend_word(false,FC_RETOP);
-	}
-	gen_mov_word_from_reg(FC_RETOP,decode.big_op?(void*)(&reg_eip):(void*)(&reg_ip),true);
+	else gen_call_function_raw((void*)&dynrec_pop_word);
+	gen_mov_word_from_reg(FC_RETOP,decode.big_op?(void*)(&reg_eip):(void*)(&reg_ip),decode.big_op);
 
 	if (bytes) gen_add_direct_word(&reg_esp,bytes,true);
 	dyn_return(BR_Normal);
@@ -1207,7 +1209,7 @@ static void dyn_call_near_imm(void) {
 	gen_mov_word_from_reg(FC_OP1,decode.big_op?(void*)(&reg_eip):(void*)(&reg_ip),decode.big_op);
 
 	dyn_reduce_cycles();
-	gen_jmp_ptr(&decode.block->link[0].to,offsetof(CacheBlockDynRec,cache.start));
+	gen_jmp_ptr(&decode.block->link[0].to, offsetof(CacheBlock, cache.start));
 	dyn_closeblock();
 }
 
@@ -1249,15 +1251,14 @@ static void dyn_iret(void) {
 	dyn_closeblock();
 }
 
-static void dyn_interrupt(Bit8u num) {
+MAYBE_UNUSED static void dyn_interrupt(Bit8u num)
+{
 	dyn_reduce_cycles();
 	dyn_set_eip_last_end(FC_RETOP);
 	gen_call_function_IIR((void*)&CPU_Interrupt,num,CPU_INT_SOFTWARE,FC_RETOP);
 	dyn_return(BR_Normal);
 	dyn_closeblock();
 }
-
-
 
 static void dyn_string(StringOps op) {
 	if (decode.rep) MOV_REG_WORD_TO_HOST_REG(FC_OP1,DRC_REG_ECX,decode.big_addr);
@@ -1320,72 +1321,56 @@ static void dyn_string(StringOps op) {
 
 
 static void dyn_read_port_byte_direct(Bit8u port) {
-	dyn_add_iocheck_var(port,1);
-	gen_call_function_I((void*)&IO_ReadB,port);
-	MOV_REG_BYTE_FROM_HOST_REG_LOW(FC_RETOP,DRC_REG_EAX,0);
+	gen_mov_dword_to_reg_imm(FC_OP1,port);
+	gen_call_function_raw((void*)&dynrec_io_readB);
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_read_port_word_direct(Bit8u port) {
-	dyn_add_iocheck_var(port,decode.big_op?4:2);
-	gen_call_function_I(decode.big_op?((void*)&IO_ReadD):((void*)&IO_ReadW),port);
-	MOV_REG_WORD_FROM_HOST_REG(FC_RETOP,DRC_REG_EAX,decode.big_op);
+	gen_mov_dword_to_reg_imm(FC_OP1,port);
+	gen_call_function_raw(decode.big_op?((void*)&dynrec_io_readD):((void*)&dynrec_io_readW));
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_write_port_byte_direct(Bit8u port) {
-	dyn_add_iocheck_var(port,1);
-	MOV_REG_BYTE_TO_HOST_REG_LOW(FC_RETOP,DRC_REG_EAX,0);
-	gen_extend_byte(false,FC_RETOP);
-	gen_call_function_IR((void*)&IO_WriteB,port,FC_RETOP);
+	gen_mov_dword_to_reg_imm(FC_OP1,port);
+	gen_call_function_raw((void*)&dynrec_io_writeB);
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_write_port_word_direct(Bit8u port) {
-	dyn_add_iocheck_var(port,decode.big_op?4:2);
-	MOV_REG_WORD_TO_HOST_REG(FC_RETOP,DRC_REG_EAX,decode.big_op);
-	if (!decode.big_op) gen_extend_word(false,FC_RETOP);
-	gen_call_function_IR(decode.big_op?((void*)&IO_WriteD):((void*)&IO_WriteW),port,FC_RETOP);
+	gen_mov_dword_to_reg_imm(FC_OP1,port);
+	gen_call_function_raw(decode.big_op?((void*)&dynrec_io_writeD):((void*)&dynrec_io_writeW));
+	dyn_check_exception(FC_RETOP);
 }
 
 
 static void dyn_read_port_byte(void) {
-	MOV_REG_WORD16_TO_HOST_REG(FC_ADDR,DRC_REG_EDX);
-	gen_extend_word(false,FC_ADDR);
-	gen_protect_addr_reg();
-	dyn_add_iocheck(FC_ADDR,1);
-	gen_restore_addr_reg();
-	gen_call_function_R((void*)&IO_ReadB,FC_ADDR);
-	MOV_REG_BYTE_FROM_HOST_REG_LOW(FC_RETOP,DRC_REG_EAX,0);
+	MOV_REG_WORD16_TO_HOST_REG(FC_OP1,DRC_REG_EDX);
+	gen_extend_word(false,FC_OP1);
+	gen_call_function_raw((void*)&dynrec_io_readB);
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_read_port_word(void) {
-	MOV_REG_WORD16_TO_HOST_REG(FC_ADDR,DRC_REG_EDX);
-	gen_extend_word(false,FC_ADDR);
-	gen_protect_addr_reg();
-	dyn_add_iocheck(FC_ADDR,decode.big_op?4:2);
-	gen_restore_addr_reg();
-	gen_call_function_R(decode.big_op?((void*)&IO_ReadD):((void*)&IO_ReadW),FC_ADDR);
-	MOV_REG_WORD_FROM_HOST_REG(FC_RETOP,DRC_REG_EAX,decode.big_op);
+	MOV_REG_WORD16_TO_HOST_REG(FC_OP1,DRC_REG_EDX);
+	gen_extend_word(false,FC_OP1);
+	gen_call_function_raw(decode.big_op?((void*)&dynrec_io_readD):((void*)&dynrec_io_readW));
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_write_port_byte(void) {
-	MOV_REG_WORD16_TO_HOST_REG(FC_ADDR,DRC_REG_EDX);
-	gen_extend_word(false,FC_ADDR);
-	gen_protect_addr_reg();
-	dyn_add_iocheck(FC_ADDR,1);
-	MOV_REG_BYTE_TO_HOST_REG_LOW(FC_RETOP,DRC_REG_EAX,0);
-	gen_extend_byte(false,FC_RETOP);
-	gen_restore_addr_reg();
-	gen_call_function_RR((void*)&IO_WriteB,FC_ADDR,FC_RETOP);
+	MOV_REG_WORD16_TO_HOST_REG(FC_OP1,DRC_REG_EDX);
+	gen_extend_word(false,FC_OP1);
+	gen_call_function_raw((void*)&dynrec_io_writeB);
+	dyn_check_exception(FC_RETOP);
 }
 
 static void dyn_write_port_word(void) {
-	MOV_REG_WORD16_TO_HOST_REG(FC_ADDR,DRC_REG_EDX);
-	gen_extend_word(false,FC_ADDR);
-	gen_protect_addr_reg();
-	dyn_add_iocheck(FC_ADDR,decode.big_op?4:2);
-	MOV_REG_WORD_TO_HOST_REG(FC_RETOP,DRC_REG_EAX,decode.big_op);
-	if (!decode.big_op) gen_extend_word(false,FC_RETOP);
-	gen_restore_addr_reg();
-	gen_call_function_RR(decode.big_op?((void*)&IO_WriteD):((void*)&IO_WriteW),FC_ADDR,FC_RETOP);
+	MOV_REG_WORD16_TO_HOST_REG(FC_OP1,DRC_REG_EDX);
+	gen_extend_word(false,FC_OP1);
+	gen_call_function_raw(decode.big_op?((void*)&dynrec_io_writeD):((void*)&dynrec_io_writeW));
+	dyn_check_exception(FC_RETOP);
 }
 
 

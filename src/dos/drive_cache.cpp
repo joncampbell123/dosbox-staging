@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@
 #include "cross.h"
 #include "dos_inc.h"
 #include "drives.h"
+#include "string_utils.h"
 #include "support.h"
 
 int fileInfoCounter = 0;
@@ -107,7 +108,7 @@ void DOS_Drive_Cache::EmptyCache(void) {
 	dirBase		= new CFileInfo;
 	save_dir	= nullptr;
 	srchNr		= 0;
-	SetBaseDir(basePath);
+	if (basePath[0] != 0) SetBaseDir(basePath);
 }
 
 void DOS_Drive_Cache::SetLabel(const char* vname,bool cdrom,bool allowupdate) {
@@ -135,7 +136,11 @@ Bit16u DOS_Drive_Cache::GetFreeID(CFileInfo* dir) {
 	return 0;
 }
 
-void DOS_Drive_Cache::SetBaseDir(const char* baseDir) {
+void DOS_Drive_Cache::SetBaseDir(const char *baseDir)
+{
+	if (is_empty(baseDir))
+		return;
+
 	// Guard if source and destination are the same
 	if (basePath == baseDir) {
 		return;
@@ -561,14 +566,10 @@ void DOS_Drive_Cache::CreateShortName(CFileInfo* curDir, CFileInfo* info) {
 	Bits	len			= 0;
 	bool	createShort = false;
 
-	char tmpNameBuffer[CROSS_LEN];
-
-	char* tmpName = tmpNameBuffer;
-
 	// Remove Spaces
-	// avoid using safe_strncpy to prevent GCC warning about truncation on an incomplete copy
-	strncpy(tmpName, info->orgname, CROSS_LEN);
-	tmpName[CROSS_LEN - 1] = '\0'; // zero-terminate even if the source wasn't
+	char tmpNameBuffer[CROSS_LEN];
+	safe_strcpy(tmpNameBuffer, info->orgname);
+	char* tmpName = tmpNameBuffer;
 	upcase(tmpName);
 	createShort = RemoveSpaces(tmpName);
 
@@ -609,6 +610,7 @@ void DOS_Drive_Cache::CreateShortName(CFileInfo* curDir, CFileInfo* info) {
 		// TODO: modify MOUNT/IMGMOUNT to exit with an error when encountering
 		// a directory having more than 65534 files, which is FAT32's limit.
 		char short_nr[8] = {'\0'};
+		if (GCC_UNLIKELY(info->shortNr > 9999999)) E_Exit("~9999999 same name files overflow");
 		snprintf(short_nr, sizeof(short_nr), "%u", info->shortNr);
 
 		// Copy first letters
@@ -660,7 +662,7 @@ void DOS_Drive_Cache::CreateShortName(CFileInfo* curDir, CFileInfo* info) {
 			curDir->longNameList.push_back(info);
 		}
 	} else {
-		safe_strncpy(info->shortname, tmpName, DOS_NAMELENGTH_ASCII);
+		safe_strcpy(info->shortname, tmpName);
 	}
 	RemoveTrailingDot(info->shortname);
 }
@@ -771,7 +773,8 @@ bool DOS_Drive_Cache::OpenDir(CFileInfo* dir, const char* expand, Bit16u& id) {
 	safe_strcpy(expandcopy, expand);
 	// Add "/"
 	char end[2]={CROSS_FILESPLIT,0};
-	if (expandcopy[strlen(expandcopy)-1] != CROSS_FILESPLIT) {
+	const size_t expandcopylen = strlen(expandcopy);
+	if (expandcopylen > 0 && expandcopy[expandcopylen - 1] != CROSS_FILESPLIT) {
 		safe_strcat(expandcopy, end);
 	}
 	// open dir

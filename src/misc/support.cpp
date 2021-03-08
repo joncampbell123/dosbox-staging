@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,26 +19,50 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "support.h"
 
 #include <algorithm>
-#include <assert.h>
+#include <cassert>
 #include <cctype>
-#include <ctype.h>
+#include <climits>
+#include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string>
 #include <stdexcept>
+#include <string>
 
-#include "dosbox.h"
 #include "cross.h"
 #include "debug.h"
-#include "support.h"
 #include "video.h"
 
-std::string get_basename(const std::string& filename) {
+char int_to_char(int val)
+{
+	// To handle inbound values cast from unsigned chars, permit a slightly
+	// wider range to avoid triggering the assert when processing international
+	// ASCII values between 128 and 255.
+	assert(val >= CHAR_MIN && val <= UCHAR_MAX);
+	return static_cast<char>(val);
+}
+
+uint8_t drive_index(char drive)
+{
+	const auto drive_letter = int_to_char(toupper(drive));
+	// Confirm the provided drive is valid
+	assert(drive_letter >= 'A' && drive_letter <= 'Z');
+	return static_cast<uint8_t>(drive_letter - 'A');
+}
+
+char drive_letter(uint8_t index)
+{
+	assert(index <= 26);
+	return 'A' + index;
+}
+
+std::string get_basename(const std::string &filename)
+{
 	// Guard against corner cases: '', '/', '\', 'a'
 	if (filename.length() <= 1)
 		return filename;
@@ -64,11 +91,97 @@ void lowcase(std::string &str) {
 	std::transform(str.begin(), str.end(), str.begin(), tf);
 }
 
-void trim(std::string &str) {
-	std::string::size_type loc = str.find_first_not_of(" \r\t\f\n");
-	if (loc != std::string::npos) str.erase(0,loc);
-	loc = str.find_last_not_of(" \r\t\f\n");
-	if (loc != std::string::npos) str.erase(loc+1);
+bool is_executable_filename(const std::string &filename) noexcept
+{
+	const size_t n = filename.length();
+	if (n < 4)
+		return false;
+	if (filename[n - 4] != '.')
+		return false;
+	std::string sfx = filename.substr(n - 3);
+	lowcase(sfx);
+	return (sfx == "exe" || sfx == "bat" || sfx == "com");
+}
+
+std::string replace(const std::string &str, char old_char, char new_char) noexcept
+{
+	std::string new_str = str;
+	for (char &c : new_str)
+		if (c == old_char)
+			c = new_char;
+	return str;
+}
+
+void trim(std::string &str)
+{
+	constexpr char whitespace[] = " \r\t\f\n";
+	const auto empty_pfx = str.find_first_not_of(whitespace);
+	if (empty_pfx == std::string::npos) {
+		str.clear(); // whole string is filled with whitespace
+		return;
+	}
+	const auto empty_sfx = str.find_last_not_of(whitespace);
+	str.erase(empty_sfx + 1);
+	str.erase(0, empty_pfx);
+}
+
+std::vector<std::string> split(const std::string &seq, const char delim)
+{
+	std::vector<std::string> words;
+	if (seq.empty())
+		return words;
+
+	// count delimeters to reserve space in our vector of words
+	const size_t n = 1u + std::count(seq.begin(), seq.end(), delim);
+	words.reserve(n);
+
+	std::string::size_type head = 0;
+	while (head != std::string::npos) {
+		const auto tail = seq.find_first_of(delim, head);
+		const auto word_len = tail - head;
+		words.emplace_back(seq.substr(head, word_len));
+		if (tail == std::string::npos) {
+			break;
+		}
+		head += word_len + 1;
+	}
+
+	// did we reserve the exact space needed?
+	assert(n == words.size());
+
+	return words;
+}
+
+std::vector<std::string> split(const std::string &seq)
+{	
+	std::vector<std::string> words;
+	if (seq.empty())
+		return words;
+
+	constexpr auto whitespace = " \f\n\r\t\v";
+
+	// count words to reserve space in our vector
+	size_t n = 0;
+	auto head = seq.find_first_not_of(whitespace, 0);
+	while (head != std::string::npos) {
+		const auto tail = seq.find_first_of(whitespace, head);
+		head = seq.find_first_not_of(whitespace, tail);
+		++n;
+	}
+	words.reserve(n);
+
+	// populate the vector with the words
+	head = seq.find_first_not_of(whitespace, 0);
+	while (head != std::string::npos) {
+		const auto tail = seq.find_first_of(whitespace, head);
+		words.emplace_back(seq.substr(head, tail - head));
+		head = seq.find_first_not_of(whitespace, tail);
+	}
+
+	// did we reserve the exact space needed?
+	assert(n == words.size());
+
+	return words;
 }
 
 void strip_punctuation(std::string &str) {
@@ -175,21 +288,6 @@ char * StripWord(char *&line) {
 	return begin;
 }
 
-Bits ConvDecWord(char * word) {
-	bool negative=false;Bitu ret=0;
-	if (*word=='-') {
-		negative=true;
-		word++;
-	}
-	while (char c=*word) {
-		ret*=10;
-		ret+=c-'0';
-		word++;
-	}
-	if (negative) return 0-ret;
-	else return ret;
-}
-
 Bits ConvHexWord(char * word) {
 	Bitu ret=0;
 	while (char c=toupper(*reinterpret_cast<unsigned char*>(word))) {
@@ -201,23 +299,35 @@ Bits ConvHexWord(char * word) {
 	return ret;
 }
 
-double ConvDblWord(char * word) {
-	return 0.0f;
-}
-
-
-static char buf[1024];           //greater scope as else it doesn't always gets thrown right (linux/gcc2.95)
-void E_Exit(const char * format,...) {
+static char e_exit_buf[1024]; // greater scope as else it doesn't always gets
+                              // thrown right
+void E_Exit(const char *format, ...)
+{
 #if C_DEBUG && C_HEAVY_DEBUG
- 	DEBUG_HeavyWriteLogInstruction();
+	DEBUG_HeavyWriteLogInstruction();
 #endif
 	va_list msg;
-	va_start(msg,format);
-	vsnprintf(buf,sizeof(buf),format,msg);
+	va_start(msg, format);
+	vsnprintf(e_exit_buf, ARRAY_LEN(e_exit_buf), format, msg);
 	va_end(msg);
+	throw(e_exit_buf);
+}
 
-	buf[sizeof(buf) - 1] = '\0';
-	//strcat(buf,"\n"); catcher should handle the end of line.. 
-
-	throw(buf);
+std::string safe_strerror(int err) noexcept
+{
+	char buf[128];
+#if defined(WIN32)
+	// C11 version; unavailable in C++14 in general.
+	strerror_s(buf, ARRAY_LEN(buf), err);
+	return buf;
+#elif defined(_GNU_SOURCE)
+	// GNU has POSIX-incompatible version, which fills the buffer
+	// only when unknown error is passed, otherwise it returns
+	// the internal glibc buffer.
+	return strerror_r(err, buf, ARRAY_LEN(buf));
+#else
+	// POSIX version
+	strerror_r(err, buf, ARRAY_LEN(buf));
+	return buf;
+#endif
 }

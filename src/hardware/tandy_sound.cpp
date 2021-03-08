@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,58 @@
 
 /* 
 	Based of sn76496.c of the M.A.M.E. project
+*/
+
+/*
+A note about accurately emulating the Tandy's digital to analog (DAC) behavior
+------------------------------------------------------------------------------
+The Tandy's DAC is responsible for converting digital audio samples into their
+analog equivalents in the form of voltage levels output to the line-out or
+speaker.
+
+After playing a sequence of samples, such as a sound effect, the last value fed
+into the DAC will correspond to the final voltage set in the line-out.
+
+Well behaved audio sequences end with zero amplitude and thus leave the speaker
+in the neutral position (without a positive or negative voltage); and this is
+what we see in practice.
+
+However, Price of Persia uniquely terminates most of its sound effects with a
+non-zero amplitude, leaving the DAC holding a non-zero voltage, which is also
+called a DC-offset.
+
+The Tandy controller mitigates DC-offset by incrementally stepping the DAC's
+output voltage back toward the neutral centerline. This DAC ramp-down behavior
+is audible as an artifact post-fixed onto every Prince of Persia sound effect,
+which sounds like a soft, short-lived shoe squeak.
+
+This hardware behavior can be emulated by tracking the last sample played,
+checking if it's at the centerline or not (centerline being 128, in the range of
+unisigned 8-bit values).  If it's not at the centerline, then steading generate
+new samples than trend this last-played value toward the centerline until it's
+reached.
+
+The DOSBox-X project has faithfully [*] replicated this hardware artifact using
+the following code-snippet:
+
+if (tandy.dac.dma.last_sample != 128) {
+        for (Bitu ct=0; ct < length; ct++) {
+                tandy.dac.chan->AddSamples_m8(1,&tandy.dac.dma.last_sample);
+                if (tandy.dac.dma.last_sample != 128)
+                        tandy.dac.dma.last_sample =
+(Bit8u)(((((int)tandy.dac.dma.last_sample - 128) * 63) / 64) + 128);
+        }
+}
+
+[*] As the author Jonathan Campbell explains, "I used a VGA capture card and an
+MCE2VGA to capture the output of a real Tandy 1000, and then tried to adjust the
+Tandy DAC code to match the artifact after each step."
+
+The implementation below prioritizes the game author's intended audio score
+ahead of deleterious artifacts caused by hardware defects or limitations.
+Because the sound caused by the Tandy's DAC is not part of the game's audio
+score, we deliberately omit this behavior and terminate sequences at the
+centerline.
 */
 
 #include "dosbox.h"
@@ -39,29 +91,30 @@
 #define TDAC_DMA_BUFSIZE 1024
 
 static struct {
-	MixerChannel * chan;
-	bool enabled;
-	Bitu last_write;
+	MixerChannel *chan = nullptr;
+	bool enabled = false;
+	Bitu last_write = 0u;
 	struct {
-		MixerChannel * chan;
-		bool enabled;
+		MixerChannel *chan = nullptr;
+		bool enabled = false;
 		struct {
-			Bitu base;
-			Bit8u irq,dma;
+			Bitu base = 0u;
+			Bit8u irq = 0u;
+			Bit8u dma = 0u;
 		} hw;
 		struct {
-			Bitu rate;
-			Bit8u buf[TDAC_DMA_BUFSIZE];
-			Bit8u last_sample;
-			DmaChannel * chan;
-			bool transfer_done;
+			Bitu rate = 0u;
+			Bit8u buf[TDAC_DMA_BUFSIZE] = {};
+			DmaChannel *chan = nullptr;
+			bool transfer_done = false;
 		} dma;
-		Bit8u mode,control;
-		Bit16u frequency;
-		Bit8u amplitude;
-		bool irq_activated;
-	} dac;
-} tandy;
+		Bit8u mode = 0u;
+		Bit8u control = 0u;
+		Bit16u frequency = 0u;
+		Bit8u amplitude = 0u;
+		bool irq_activated = false;
+	} dac = {};
+} tandy = {};
 
 static sn76496_device device_sn76496(machine_config(), 0, 0, SOUND_CLOCK );
 static ncr8496_device device_ncr8496(machine_config(), 0, 0, SOUND_CLOCK);
@@ -71,18 +124,22 @@ static sn76496_base_device* activeDevice = &device_ncr8496;
 
 static void SN76496Write(Bitu /*port*/,Bitu data,Bitu /*iolen*/) {
 	tandy.last_write=PIC_Ticks;
-	if (!tandy.enabled) {
+	if (!tandy.enabled && tandy.chan) {
 		tandy.chan->Enable(true);
 		tandy.enabled=true;
 	}
 	device.write(data);
 
-//	LOG_MSG("3voice write %X at time %7.3f",data,PIC_FullIndex());
+	//	LOG_MSG("3voice write %#" PRIxPTR " at time
+	//%7.3f",data,PIC_FullIndex());
 }
 
 static void SN76496Update(Bitu length) {
-	//Disable the channel if it's been quiet for a while
-	if ((tandy.last_write+5000)<PIC_Ticks) {
+	if (!tandy.chan)
+		return;
+
+	// Disable the channel if it's been quiet for a while
+	if ((tandy.last_write + 5000) < PIC_Ticks) {
 		tandy.enabled=false;
 		tandy.chan->Enable(false);
 		return;
@@ -119,8 +176,15 @@ static void TandyDAC_DMA_CallBack(DmaChannel * /*chan*/, DMAEvent event) {
 	}
 }
 
-static void TandyDACModeChanged(void) {
-	switch (tandy.dac.mode&3) {
+static void TandyDACModeChanged()
+{
+	if (!tandy.dac.chan) {
+		DEBUG_LOG_MSG("TANDY: Skipping mode change until the DAC is "
+		              "initialized");
+		return;
+	}
+
+	switch (tandy.dac.mode & 3) {
 	case 0:
 		// joystick mode
 		break;
@@ -151,12 +215,13 @@ static void TandyDACModeChanged(void) {
 	}
 }
 
-static void TandyDACDMAEnabled(void) {
+static void TandyDACDMAEnabled()
+{
 	TandyDACModeChanged();
 }
 
-static void TandyDACDMADisabled(void) {
-}
+static void TandyDACDMADisabled()
+{}
 
 static void TandyDACWrite(Bitu port,Bitu data,Bitu /*iolen*/) {
 	switch (port) {
@@ -227,38 +292,30 @@ static Bitu TandyDACRead(Bitu port,Bitu /*iolen*/) {
 	case 0xc7:
 		return (Bit8u)(((tandy.dac.frequency>>8)&0xf) | (tandy.dac.amplitude<<5));
 	}
-	LOG_MSG("Tandy DAC: Read from unknown %X",port);
+	LOG_MSG("Tandy DAC: Read from unknown %#" PRIxPTR, port);
 	return 0xff;
 }
 
-static void TandyDACGenerateDMASound(Bitu length) {
-	if (length) {
-		Bitu read=tandy.dac.dma.chan->Read(length,tandy.dac.dma.buf);
-		tandy.dac.chan->AddSamples_m8(read,tandy.dac.dma.buf);
-		if (read < length) {
-			if (read>0) tandy.dac.dma.last_sample=tandy.dac.dma.buf[read-1];
-			for (Bitu ct=read; ct < length; ct++) {
-				tandy.dac.chan->AddSamples_m8(1,&tandy.dac.dma.last_sample);
-			}
-		}
+static void TandyDACUpdate(size_t requested)
+{
+	if (!tandy.dac.chan || !tandy.dac.dma.chan) {
+		DEBUG_LOG_MSG(
+		        "TANDY: Skipping update until the DAC is initialized");
+		return;
 	}
-}
 
-static void TandyDACUpdate(Bitu length) {
-	if (tandy.dac.enabled && ((tandy.dac.mode&0x0c)==0x0c)) {
-		if (!tandy.dac.dma.transfer_done) {
-			Bitu len = length;
-			TandyDACGenerateDMASound(len);
-		} else {
-			for (Bitu ct=0; ct < length; ct++) {
-				tandy.dac.chan->AddSamples_m8(1,&tandy.dac.dma.last_sample);
-			}
-		}
-	} else {
-		tandy.dac.chan->AddSilence();
-	}
+	uint8_t *buf = tandy.dac.dma.buf;
+	const bool should_read = tandy.dac.enabled &&
+	                         (tandy.dac.mode & 0x0c) == 0x0c &&
+	                         !tandy.dac.dma.transfer_done;
+	size_t actual = should_read ? tandy.dac.dma.chan->Read(requested, buf) : 0u;
+	// If we came up short, move back one to terminate the tail in silence
+	if (actual && actual < requested)
+		actual--;
+	// Always write the requested quantity regardless of read status
+	memset(buf + actual, 128u, requested - actual);
+	tandy.dac.chan->AddSamples_m8(requested, buf);
 }
-
 
 class TANDYSOUND: public Module_base {
 private:
@@ -267,8 +324,12 @@ private:
 	MixerObject MixerChan;
 	MixerObject MixerChanDAC;
 public:
-	TANDYSOUND(Section* configuration):Module_base(configuration){
-		Section_prop * section=static_cast<Section_prop *>(configuration);
+	TANDYSOUND(Section *configuration)
+	        : Module_base(configuration),
+	          MixerChan(),
+	          MixerChanDAC()
+	{
+		Section_prop *section = static_cast<Section_prop *>(configuration);
 
 		bool enable_hw_tandy_dac=true;
 		Bitu sbport, sbirq, sbdma;
@@ -329,21 +390,16 @@ public:
 		tandy.dac.mode   =0;
 		tandy.dac.irq_activated=false;
 		tandy.dac.frequency=0;
-		tandy.dac.amplitude=0;
-		tandy.dac.dma.last_sample=0;
-
+		tandy.dac.amplitude = 0;
 
 		tandy.enabled=false;
 		real_writeb(0x40,0xd4,0xff);	/* BIOS Tandy DAC initialization value */
 
 		((device_t&)device).device_start();
 		device.convert_samplerate(sample_rate);
-
 	}
 	~TANDYSOUND(){ }
 };
-
-
 
 static TANDYSOUND* test;
 

@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,16 +19,22 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_MIXER_H
 #define DOSBOX_MIXER_H
 
-#ifndef DOSBOX_DOSBOX_H
 #include "dosbox.h"
-#endif
 
-typedef void (*MIXER_MixHandler)(Bit8u * sampdate,Bit32u len);
-typedef void (*MIXER_Handler)(Bitu len);
+#include <functional>
+
+#include "envelope.h"
+
+typedef void (*MIXER_MixHandler)(Bit8u *sampdate, Bit32u len);
+
+// The mixer callback can accept a static function or a member function
+// using a std::bind. The callback typically requests enough frames to
+// fill one millisecond with of audio. For an audio channel running at
+// 48000 Hz, that's 48 frames.
+using MIXER_Handler = std::function<void(uint16_t frames)>;
 
 enum BlahModes {
 	MIXER_8MONO,MIXER_8STEREO,
@@ -37,8 +46,14 @@ enum MixerModes {
 	M_16M,M_16S
 };
 
-#define MIXER_BUFSIZE (16*1024)
-#define MIXER_BUFMASK (MIXER_BUFSIZE-1)
+// A simple stereo audio frame
+struct AudioFrame {
+	float left = 0;
+	float right = 0;
+};
+
+#define MIXER_BUFSIZE (16 * 1024)
+#define MIXER_BUFMASK (MIXER_BUFSIZE - 1)
 extern Bit8u MixTemp[MIXER_BUFSIZE];
 
 #define MAX_AUDIO ((1<<(16-1))-1)
@@ -47,14 +62,19 @@ extern Bit8u MixTemp[MIXER_BUFSIZE];
 class MixerChannel {
 public:
 	MixerChannel(MIXER_Handler _handler, Bitu _freq, const char * _name);
-	void SetVolume(float _left,float _right);
+	uint32_t GetSampleRate() const;
+	bool IsInterpolated() const;
+	using apply_level_callback_f = std::function<void(const AudioFrame &level)>;
+	void RegisterLevelCallBack(apply_level_callback_f cb);
+	void SetVolume(float _left, float _right);
 	void SetScale(float f);
 	void SetScale(float _left, float _right);
 	void MapChannels(Bit8u _left, Bit8u _right);
-	void UpdateVolume(void);
+	void UpdateVolume();
 	void SetFreq(Bitu _freq);
+	void SetPeakAmplitude(uint32_t peak);
 	void Mix(Bitu _needed);
-	void AddSilence(void);			//Fill up until needed
+	void AddSilence(); // Fill up until needed
 
 	template<class Type,bool stereo,bool signeddata,bool nativeorder>
 	void AddSamples(Bitu len, const Type* data);
@@ -76,29 +96,55 @@ public:
 	void AddSamples_m32_nonnative(Bitu len, const Bit32s * data);
 	void AddSamples_s32_nonnative(Bitu len, const Bit32s * data);
 	
-	void AddStretched(Bitu len,Bit16s * data);		//Strech block up into needed data
+	void AddStretched(Bitu len,Bit16s * data);		//Stretch block up into needed data
 
-	void FillUp(void);
-	void Enable(bool _yesno);
+	void FillUp();
+	void Enable(bool should_enable);
+	void FlushSamples();
 
-	float          volmain[2];
-	MixerChannel*  next;
-	const char*    name;
-	Bitu           done;           //Timing on how many samples have been done by the mixer
-	bool           enabled;
+	float volmain[2] = {0.0f, 0.0f};
+	MixerChannel *next = nullptr;
+	const char *name = nullptr;
+	Bitu done = 0u; // Timing on how many samples have been done by the mixer
+	bool is_enabled = false;
 
 private:
-	MixerChannel();
-	MIXER_Handler  handler;
-	Bitu           freq_add;       //This gets added the frequency counter each mixer step
-	Bitu           freq_counter;   //When this flows over a new sample needs to be read from the device
-	Bitu           needed; 	       //Timing on how many samples were needed by the mixer
-	Bits           prev_sample[2]; //Previous and next samples
-	Bits           next_sample[2];
-	Bit32s         volmul[2];
-	float          scale[2];
-	Bit8u          channel_map[2]; //Output channel mapping
-	bool           interpolate;
+	// prevent default construction, copying, and assignment
+	MixerChannel() = delete;
+	MixerChannel(const MixerChannel &) = delete;
+	MixerChannel &operator=(const MixerChannel &) = delete;
+
+	Envelope envelope;
+	MIXER_Handler handler = nullptr;
+	Bitu freq_add = 0u; // This gets added the frequency counter each mixer
+	                    // step
+	Bitu freq_counter = 0u; // When this flows over a new sample needs to be
+	                        // read from the device
+	Bitu needed = 0u; // Timing on how many samples were needed by the mixer
+	Bits prev_sample[2] = {0}; // Previous and next samples
+	Bits next_sample[2] = {0};
+	// Simple way to lower the impact of DC offset. if MIXER_UPRAMP_STEPS is >0.
+	// Still work in progress and thus disabled for now.
+	Bits offset[2] = {0};
+	uint32_t sample_rate = 0u;
+	int32_t volmul[2] = {0};
+	float scale[2] = {0.0f, 0.0f};
+
+	// Defines the peak sample amplitude we can expect in this channel.
+	// Default to signed 16bit max, however channel's that know their own
+	// peak, like the PCSpeaker, should update it with: SetPeakAmplitude()
+	uint32_t peak_amplitude = MAX_AUDIO;
+
+	uint8_t channel_map[2] = {0u, 0u}; // Output channel mapping
+
+	// The RegisterLevelCallBack() assigns this callback that can be used by
+	// the channel's source to manage the stream's level prior to mixing,
+	// in-place of scaling by volmain[]
+	apply_level_callback_f apply_level = nullptr;
+
+	bool interpolate = false;
+	bool last_samples_were_stereo = false;
+	bool last_samples_were_silence = true;
 };
 
 MixerChannel * MIXER_AddChannel(MIXER_Handler handler,Bitu freq,const char * name);
@@ -113,11 +159,10 @@ private:
 	bool installed;
 	char m_name[32];
 public:
-	MixerObject():installed(false){};
+	MixerObject() : installed(false) {}
 	MixerChannel* Install(MIXER_Handler handler,Bitu freq,const char * name);
 	~MixerObject();
 };
-
 
 /* PC Speakers functions, tightly related to the timer functions */
 void PCSPEAKER_SetCounter(Bitu cntr,Bitu mode);

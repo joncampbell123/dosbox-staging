@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,15 +16,17 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "dosbox.h"
 
-#include <sys/types.h>
-#include <assert.h>
+#include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
-#include <stdlib.h>
+#include <unordered_map>
 
-#include "dosbox.h"
+#include <sys/types.h>
+
 #include "video.h"
 #include "render.h"
 #include "setup.h"
@@ -34,9 +36,12 @@
 #include "hardware.h"
 #include "support.h"
 #include "shell.h"
+#include "string_utils.h"
+#include "vga.h"
 
-#include "render_scalers.h"
+#include "render_crt_glsl.h"
 #include "render_glsl.h"
+#include "render_scalers.h"
 
 Render_t render;
 ScalerLineHandler_t RENDER_DrawLine;
@@ -441,19 +446,25 @@ forcenormal:
 			height = MakeAspectTable( skip, render.src.height, yscale, yscale);
 		}
 	}
-/* Setup the scaler variables */
-	double par;  /* the pixel aspect ratio of the source pixel array */
-	par = (double)width / height / 4 * 3; /* MS-DOS screen is always 4:3 */
+
+	// Setup the scaler variables
 
 	if (dblh)
 		gfx_flags |= GFX_DBL_H;
 	if (dblw)
 		gfx_flags |= GFX_DBL_W;
 
-	#if C_OPENGL
-		GFX_SetShader(render.shader_src);
-	#endif
-	gfx_flags=GFX_SetSize(width,height,gfx_flags,gfx_scalew,gfx_scaleh,&RENDER_CallBack,par);
+#if C_OPENGL
+	GFX_SetShader(render.shader_src);
+#endif
+
+	// The pixel aspect ratio of the source image, assuming 4:3 screen
+	const double real_par = (width / 4.0) / (height / 3.0);
+	const double user_par = (render.aspect ? real_par : 1.0);
+
+	gfx_flags = GFX_SetSize(width, height, gfx_flags, gfx_scalew,
+	                        gfx_scaleh, &RENDER_CallBack, user_par);
+
 	if (gfx_flags & GFX_CAN_8)
 		render.scale.outMode = scalerMode8;
 	else if (gfx_flags & GFX_CAN_15)
@@ -514,7 +525,7 @@ forcenormal:
 		render.scale.cachePitch = render.src.width * 4;
 		break;
 	default:
-		E_Exit("RENDER:Wrong source bpp %d", render.src.bpp );
+		E_Exit("RENDER:Wrong source bpp %u", render.src.bpp);
 	}
 	render.scale.blocks = render.src.width / SCALER_BLOCKSIZE;
 	render.scale.lastBlock = render.src.width % SCALER_BLOCKSIZE;
@@ -608,29 +619,39 @@ void RENDER_SetForceUpdate(bool f) {
 }
 
 #if C_OPENGL
-static bool RENDER_GetShader(std::string& shader_path) {
+static bool RENDER_GetShader(std::string &shader_path, char *old_src)
+{
+	const std::unordered_map<std::string, const char *> builtin_shaders = {
+	        {"advinterp2x", advinterp2x_glsl},
+	        {"advinterp3x", advinterp3x_glsl},
+	        {"advmame2x", advmame2x_glsl},
+	        {"advmame3x", advmame3x_glsl},
+	        {"crt-easymode-flat", crt_easymode_tweaked_glsl},
+	        {"crt-fakelottes-flat", crt_fakelottes_tweaked_glsl},
+	        {"default", sharp_glsl},
+	        {"rgb2x", rgb2x_glsl},
+	        {"rgb3x", rgb3x_glsl},
+	        {"scan2x", scan2x_glsl},
+	        {"scan3x", scan3x_glsl},
+	        {"sharp", sharp_glsl},
+	        {"tv2x", tv2x_glsl},
+	        {"tv3x", tv3x_glsl},
+	};
+
 	char* src;
 	std::stringstream buf;
 	std::ifstream fshader(shader_path.c_str(), std::ios_base::binary);
-	if (!fshader.is_open()) fshader.open((shader_path + ".glsl").c_str(), std::ios_base::binary);
+	if (!fshader.is_open())
+		fshader.open(shader_path + ".glsl", std::ios_base::binary);
 	if (fshader.is_open()) {
 		buf << fshader.rdbuf();
 		fshader.close();
+	} else if (builtin_shaders.count(shader_path) > 0) {
+		buf << builtin_shaders.at(shader_path);
 	}
-	else if (shader_path == "advinterp2x") buf << advinterp2x_glsl;
-	else if (shader_path == "advinterp3x") buf << advinterp3x_glsl;
-	else if (shader_path == "advmame2x")   buf << advmame2x_glsl;
-	else if (shader_path == "advmame3x")   buf << advmame3x_glsl;
-	else if (shader_path == "rgb2x")       buf << rgb2x_glsl;
-	else if (shader_path == "rgb3x")       buf << rgb3x_glsl;
-	else if (shader_path == "scan2x")      buf << scan2x_glsl;
-	else if (shader_path == "scan3x")      buf << scan3x_glsl;
-	else if (shader_path == "tv2x")        buf << tv2x_glsl;
-	else if (shader_path == "tv3x")        buf << tv3x_glsl;
-	else if (shader_path == "sharp")       buf << sharp_glsl;
 
-	std::string s = buf.str();
-	if (!s.empty()) {
+	if (!buf.str().empty()) {
+		std::string s = buf.str() + '\n';
 		if (first_shell) {
 			std::string pre_defs;
 			Bitu count = first_shell->GetEnvCount();
@@ -639,10 +660,10 @@ static bool RENDER_GetShader(std::string& shader_path) {
 				if (!first_shell->GetEnvNum(i, env))
 					continue;
 				if (env.compare(0, 9, "GLSHADER_")==0) {
-					size_t brk = s.find('=');
+					size_t brk = env.find('=');
 					if (brk == std::string::npos) continue;
 					env[brk] = ' ';
-					pre_defs += "#define " + env.substr(0) + '\n';
+					pre_defs += "#define " + env.substr(9) + '\n';
 				}
 			}
 			if (!pre_defs.empty()) {
@@ -652,20 +673,15 @@ static bool RENDER_GetShader(std::string& shader_path) {
 				if (pos != std::string::npos)
 					pos = s.find('\n', pos + 9);
 
-				pos = (pos == std::string::npos) ? 0 : pos + 1;
 				s.insert(pos, pre_defs);
 			}
 		}
 		// keep the same buffer if contents aren't different
-		if (render.shader_src==NULL || s != render.shader_src) {
+		if (old_src==NULL || s != old_src) {
 			src = strdup(s.c_str());
 			if (src==NULL) LOG_MSG("WARNING: Couldn't copy shader source");
-		} else {
-			src = render.shader_src;
-			render.shader_src = NULL;
-		}
+		} else src = old_src;
 	} else src = NULL;
-	free(render.shader_src);
 	render.shader_src = src;
 	return src != NULL;
 }
@@ -686,6 +702,7 @@ void RENDER_Init(Section * sec) {
 	render.aspect=section->Get_bool("aspect");
 	render.frameskip.max=section->Get_int("frameskip");
 	render.frameskip.count=0;
+	VGA_SetMonoPalette(section->Get_string("monochrome_palette"));
 	std::string cline;
 	std::string scaler;
 	//Check for commandline paramters and parse them through the configclass so they get checked against allowed values
@@ -725,21 +742,27 @@ void RENDER_Init(Section * sec) {
 #endif
 
 #if C_OPENGL
+	assert(control);
+	const Section *sdl_sec = control->GetSection("sdl");
+	assert(sdl_sec);
+	const bool using_opengl = starts_with("opengl",
+	                                      sdl_sec->GetPropValue("output"));
 	char* shader_src = render.shader_src;
 	Prop_path *sh = section->Get_path("glshader");
 	f = (std::string)sh->GetValue();
-	if (f.empty() || f=="none") {
-		free(render.shader_src);
-		render.shader_src = NULL;
-	} else if (!RENDER_GetShader(sh->realpath)) {
+	if (f.empty() || f=="none") render.shader_src = NULL;
+	else if (!RENDER_GetShader(sh->realpath,shader_src)) {
 		std::string path;
 		Cross::GetPlatformConfigDir(path);
 		path = path + "glshaders" + CROSS_FILESPLIT + f;
-		if (!RENDER_GetShader(path) && (sh->realpath==f || !RENDER_GetShader(f))) {
+		if (!RENDER_GetShader(path,shader_src) && (sh->realpath==f || !RENDER_GetShader(f,shader_src))) {
 			sh->SetValue("none");
-			LOG_MSG("Shader file \"%s\" not found", f.c_str());
+			LOG_MSG("RENDER: Shader file '%s' not found", f.c_str());
+		} else if (using_opengl) {
+			LOG_MSG("RENDER: Using GLSL shader '%s'", f.c_str());
 		}
 	}
+	if (shader_src!=render.shader_src) free(shader_src);
 #endif
 
 	//If something changed that needs a ReInit
@@ -755,8 +778,9 @@ void RENDER_Init(Section * sec) {
 	if(!running) render.updating=true;
 	running = true;
 
-	MAPPER_AddHandler(DecreaseFrameSkip,MK_f7,MMOD1,"decfskip","Dec Fskip");
-	MAPPER_AddHandler(IncreaseFrameSkip,MK_f8,MMOD1,"incfskip","Inc Fskip");
+	MAPPER_AddHandler(DecreaseFrameSkip, SDL_SCANCODE_UNKNOWN, 0,
+	                  "decfskip", "Dec Fskip");
+	MAPPER_AddHandler(IncreaseFrameSkip, SDL_SCANCODE_UNKNOWN, 0,
+	                  "incfskip", "Inc Fskip");
 	GFX_SetTitle(-1,render.frameskip.max,false);
 }
-

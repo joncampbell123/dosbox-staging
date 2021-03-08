@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,64 +16,76 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "drives.h"
 
 #include <cctype>
 #include <cstring>
+
 #include "cdrom.h"
-#include "dosbox.h"
 #include "dos_mscdex.h"
 #include "dos_system.h"
+#include "string_utils.h"
 #include "support.h"
-#include "drives.h"
 
 #define FLAGS1	((iso) ? de.fileFlags : de.timeZone)
 #define FLAGS2	((iso) ? de->fileFlags : de->timeZone)
 
-using namespace std;
-
 class isoFile : public DOS_File {
 public:
-	isoFile(isoDrive *drive, const char *name, FileStat_Block *stat, Bit32u offset);
-	bool Read(Bit8u *data, Bit16u *size);
-	bool Write(Bit8u *data, Bit16u *size);
-	bool Seek(Bit32u *pos, Bit32u type);
+	isoFile(isoDrive *drive, const char *name, FileStat_Block *stat, uint32_t offset);
+	isoFile(const isoFile &) = delete;            // prevent copying
+	isoFile &operator=(const isoFile &) = delete; // prevent assignment
+
+	bool Read(uint8_t *data, uint16_t *size);
+	bool Write(uint8_t *data, uint16_t *size);
+	bool Seek(uint32_t *pos, uint32_t type);
 	bool Close();
-	Bit16u GetInformation(void);
+	uint16_t GetInformation(void);
+
 private:
-	isoDrive *drive;
-	Bit8u buffer[ISO_FRAMESIZE];
-	int cachedSector;
-	Bit32u fileBegin;
-	Bit32u filePos;
-	Bit32u fileEnd;
+	isoDrive *drive = nullptr;
+	int cachedSector = -1;
+	uint32_t fileBegin = 0;
+	uint32_t filePos = 0;
+	uint32_t fileEnd = 0;
+	uint8_t buffer[ISO_FRAMESIZE] = {{}};
 };
 
-isoFile::isoFile(isoDrive *drive, const char *name, FileStat_Block *stat, Bit32u offset) {
-	this->drive = drive;
+isoFile::isoFile(isoDrive *iso_drive, const char *name, FileStat_Block *stat, Bit32u offset)
+        : drive(iso_drive),
+          fileBegin(offset),
+          filePos(offset),
+          fileEnd(offset + stat->size)
+{
+	SetName(name);
+
+	// Initialize base members
+	assert(stat);
 	time = stat->time;
 	date = stat->date;
 	attr = stat->attr;
-	fileBegin = offset;
-	filePos = fileBegin;
-	fileEnd = fileBegin + stat->size;
-	cachedSector = -1;
 	open = true;
-	this->name = NULL;
-	SetName(name);
 }
 
 bool isoFile::Read(Bit8u *data, Bit16u *size) {
 	if (filePos + *size > fileEnd)
 		*size = (Bit16u)(fileEnd - filePos);
-	
-	Bit16u nowSize = 0;
-	int sector = filePos / ISO_FRAMESIZE;
-	Bit16u sectorPos = (Bit16u)(filePos % ISO_FRAMESIZE);
-	
-	if (sector != cachedSector) {
-		if (drive->readSector(buffer, sector)) cachedSector = sector;
-		else { *size = 0; cachedSector = -1; }
+
+	uint16_t nowSize = 0;
+	uint32_t sector = filePos / ISO_FRAMESIZE;
+
+	if (static_cast<int>(sector) != cachedSector) {
+		if (drive->readSector(buffer, sector)) {
+			cachedSector = static_cast<int>(sector);
+		} else {
+			*size = 0;
+			cachedSector = -1;
+		}
 	}
+
+	static_assert(ISO_FRAMESIZE <= UINT16_MAX, "");
+	auto sectorPos = static_cast<uint16_t>(filePos % ISO_FRAMESIZE);
+
 	while (nowSize < *size) {
 		Bit16u remSector = ISO_FRAMESIZE - sectorPos;
 		Bit16u remSize = *size - nowSize;
@@ -91,9 +103,7 @@ bool isoFile::Read(Bit8u *data, Bit16u *size) {
 			memcpy(&data[nowSize], &buffer[sectorPos], remSize);
 			nowSize += remSize;
 		}
-			
 	}
-	
 	*size = nowSize;
 	filePos += *size;
 	return true;
@@ -119,7 +129,7 @@ bool isoFile::Seek(Bit32u *pos, Bit32u type) {
 	}
 	if (filePos > fileEnd || filePos < fileBegin)
 		filePos = fileEnd;
-	
+
 	*pos = filePos - fileBegin;
 	return true;
 }
@@ -134,26 +144,27 @@ Bit16u isoFile::GetInformation(void) {
 }
 
 isoDrive::isoDrive(char driveLetter, const char *fileName, Bit8u mediaid, int &error)
-         :iso(false),
+        : nextFreeDirIterator(0),
+          iso(false),
           dataCD(false),
+          rootEntry{},
           mediaid(0),
           subUnit(0),
           driveLetter('\0')
- {
+{
 	this->fileName[0]  = '\0';
 	this->discLabel[0] = '\0';
-	nextFreeDirIterator = 0;
 	memset(dirIterators, 0, sizeof(dirIterators));
 	memset(sectorHashEntries, 0, sizeof(sectorHashEntries));
 	memset(&rootEntry, 0, sizeof(isoDirEntry));
-	
-	safe_strncpy(this->fileName, fileName, CROSS_LEN);
+
+	safe_strcpy(this->fileName, fileName);
 	error = UpdateMscdex(driveLetter, fileName, subUnit);
 
 	if (!error) {
 		if (loadImage()) {
-			strcpy(info, "isoDrive ");
-			strcat(info, fileName);
+			safe_strcpy(info, "isoDrive ");
+			safe_strcat(info, fileName);
 			this->driveLetter = driveLetter;
 			this->mediaid = mediaid;
 			char buffer[32] = { 0 };
@@ -161,12 +172,12 @@ isoDrive::isoDrive(char driveLetter, const char *fileName, Bit8u mediaid, int &e
 			Set_Label(buffer,discLabel,true);
 
 		} else if (CDROM_Interface_Image::images[subUnit]->HasDataTrack() == false) { //Audio only cdrom
-			strcpy(info, "isoDrive ");
-			strcat(info, fileName);
+			safe_strcpy(info, "isoDrive ");
+			safe_strcat(info, fileName);
 			this->driveLetter = driveLetter;
 			this->mediaid = mediaid;
 			char buffer[32] = { 0 };
-			strcpy(buffer, "Audio_CD");
+			safe_strcpy(buffer, "Audio_CD");
 			Set_Label(buffer,discLabel,true);
 		} else error = 6; //Corrupt image
 	}
@@ -174,22 +185,23 @@ isoDrive::isoDrive(char driveLetter, const char *fileName, Bit8u mediaid, int &e
 
 isoDrive::~isoDrive() { }
 
-int isoDrive::UpdateMscdex(char driveLetter, const char* path, Bit8u& subUnit) {
-	if (MSCDEX_HasDrive(driveLetter)) {
-		subUnit = MSCDEX_GetSubUnit(driveLetter);
-		CDROM_Interface_Image* oldCdrom = CDROM_Interface_Image::images[subUnit];
-		CDROM_Interface* cdrom = new CDROM_Interface_Image(subUnit);
+int isoDrive::UpdateMscdex(char drive_letter, const char *path, uint8_t &sub_unit)
+{
+	if (MSCDEX_HasDrive(drive_letter)) {
+		sub_unit = MSCDEX_GetSubUnit(drive_letter);
+		CDROM_Interface_Image *oldCdrom = CDROM_Interface_Image::images[sub_unit];
+		CDROM_Interface *cdrom = new CDROM_Interface_Image(sub_unit);
 		char pathCopy[CROSS_LEN];
-		safe_strncpy(pathCopy, path, CROSS_LEN);
+		safe_strcpy(pathCopy, path);
 		if (!cdrom->SetDevice(pathCopy)) {
-			CDROM_Interface_Image::images[subUnit] = oldCdrom;
+			CDROM_Interface_Image::images[sub_unit] = oldCdrom;
 			delete cdrom;
 			return 3;
 		}
-		MSCDEX_ReplaceDrive(cdrom, subUnit);
+		MSCDEX_ReplaceDrive(cdrom, sub_unit);
 		return 0;
 	} else {
-		return MSCDEX_AddDrive(driveLetter, path, subUnit);
+		return MSCDEX_AddDrive(drive_letter, path, sub_unit);
 	}
 }
 
@@ -202,7 +214,7 @@ bool isoDrive::FileOpen(DOS_File **file, char *name, Bit32u flags) {
 		DOS_SetError(DOSERR_ACCESS_DENIED);
 		return false;
 	}
-	
+
 	isoDirEntry de;
 	bool success = lookup(&de, name) && !IS_DIR(FLAGS1);
 
@@ -239,7 +251,7 @@ bool isoDrive::MakeDir(char* /*dir*/) {
 }
 
 bool isoDrive::TestDir(char *dir) {
-	isoDirEntry de;	
+	isoDirEntry de;
 	return (lookup(&de, dir) && IS_DIR(FLAGS1));
 }
 
@@ -249,7 +261,7 @@ bool isoDrive::FindFirst(char *dir, DOS_DTA &dta, bool fcb_findfirst) {
 		DOS_SetError(DOSERR_PATH_NOT_FOUND);
 		return false;
 	}
-	
+
 	// get a directory iterator and save its id in the dta
 	int dirIterator = GetDirIterator(&de);
 	bool isRoot = (*dir == 0);
@@ -259,7 +271,7 @@ bool isoDrive::FindFirst(char *dir, DOS_DTA &dta, bool fcb_findfirst) {
 	Bit8u attr;
 	char pattern[ISO_MAXPATHNAME];
 	dta.GetSearchParams(attr, pattern);
-   
+
 	if (attr == DOS_ATTR_VOLUME) {
 		dta.SetResult(discLabel, 0, 0, 0, DOS_ATTR_VOLUME);
 		return true;
@@ -278,10 +290,10 @@ bool isoDrive::FindNext(DOS_DTA &dta) {
 	Bit8u attr;
 	char pattern[DOS_NAMELENGTH_ASCII];
 	dta.GetSearchParams(attr, pattern);
-	
+
 	int dirIterator = dta.GetDirID();
 	bool isRoot = dirIterators[dirIterator].root;
-	
+
 	isoDirEntry de;
 	while (GetNextDirEntry(dirIterator, &de)) {
 		Bit8u findAttr = 0;
@@ -291,12 +303,12 @@ bool isoDrive::FindNext(DOS_DTA &dta) {
 
 		if (!IS_ASSOC(FLAGS1) && !(isRoot && de.ident[0]=='.') && WildFileCmp((char*)de.ident, pattern)
 			&& !(~attr & findAttr & (DOS_ATTR_DIRECTORY | DOS_ATTR_HIDDEN | DOS_ATTR_SYSTEM))) {
-			
+
 			/* file is okay, setup everything to be copied in DTA Block */
-			char findName[DOS_NAMELENGTH_ASCII];		
+			char findName[DOS_NAMELENGTH_ASCII];
 			findName[0] = 0;
 			if(strlen((char*)de.ident) < DOS_NAMELENGTH_ASCII) {
-				strcpy(findName, (char*)de.ident);
+				safe_strcpy(findName, (char *)de.ident);
 				upcase(findName);
 			}
 			Bit32u findSize = DATA_LENGTH(de);
@@ -308,7 +320,7 @@ bool isoDrive::FindNext(DOS_DTA &dta) {
 	}
 	// after searching the directory, free the iterator
 	FreeDirIterator(dirIterator);
-	
+
 	DOS_SetError(DOSERR_NO_MORE_FILES);
 	return false;
 }
@@ -346,7 +358,7 @@ bool isoDrive::FileExists(const char *name) {
 bool isoDrive::FileStat(const char *name, FileStat_Block *const stat_block) {
 	isoDirEntry de;
 	bool success = lookup(&de, name);
-	
+
 	if (success) {
 		stat_block->date = DOS_PackDate(1900 + de.dateYear, de.dateMonth, de.dateDay);
 		stat_block->time = DOS_PackTime(de.timeHour, de.timeMin, de.timeSec);
@@ -354,7 +366,7 @@ bool isoDrive::FileStat(const char *name, FileStat_Block *const stat_block) {
 		stat_block->attr = DOS_ATTR_ARCHIVE | DOS_ATTR_READ_ONLY;
 		if (IS_DIR(FLAGS1)) stat_block->attr |= DOS_ATTR_DIRECTORY;
 	}
-	
+
 	return success;
 }
 
@@ -380,21 +392,21 @@ Bits isoDrive::UnMount(void) {
 
 int isoDrive::GetDirIterator(const isoDirEntry* de) {
 	int dirIterator = nextFreeDirIterator;
-	
+
 	// get start and end sector of the directory entry (pad end sector if necessary)
 	dirIterators[dirIterator].currentSector = EXTENT_LOCATION(*de);
 	dirIterators[dirIterator].endSector =
 		EXTENT_LOCATION(*de) + DATA_LENGTH(*de) / ISO_FRAMESIZE - 1;
 	if (DATA_LENGTH(*de) % ISO_FRAMESIZE != 0)
 		dirIterators[dirIterator].endSector++;
-	
+
 	// reset position and mark as valid
 	dirIterators[dirIterator].pos = 0;
 	dirIterators[dirIterator].valid = true;
 
 	// advance to next directory iterator (wrap around if necessary)
 	nextFreeDirIterator = (nextFreeDirIterator + 1) % MAX_OPENDIRS;
-	
+
 	return dirIterator;
 }
 
@@ -402,14 +414,14 @@ bool isoDrive::GetNextDirEntry(const int dirIteratorHandle, isoDirEntry* de) {
 	bool result = false;
 	Bit8u* buffer = NULL;
 	DirIterator& dirIterator = dirIterators[dirIteratorHandle];
-	
+
 	// check if the directory entry is valid
 	if (dirIterator.valid && ReadCachedSector(&buffer, dirIterator.currentSector)) {
 		// check if the next sector has to be read
 		if ((dirIterator.pos >= ISO_FRAMESIZE)
 		 || (buffer[dirIterator.pos] == 0)
 		 || (dirIterator.pos + buffer[dirIterator.pos] > ISO_FRAMESIZE)) {
-		 	
+
 			// check if there is another sector available
 		 	if (dirIterator.currentSector < dirIterator.endSector) {
 			 	dirIterator.pos = 0;
@@ -422,16 +434,19 @@ bool isoDrive::GetNextDirEntry(const int dirIteratorHandle, isoDirEntry* de) {
 		 	}
 		 }
 		 // read sector and advance sector pointer
-		 int length = readDirEntry(de, &buffer[dirIterator.pos]);
+		 const int length = readDirEntry(de, &buffer[dirIterator.pos]);
 		 result = length >= 0;
-		 dirIterator.pos += length;
+		 if (length >= 0)
+			 dirIterator.pos += static_cast<unsigned>(length);
+		 else // read failed, so step back to our prior iterator
+			 dirIterator.pos--;
 	}
 	return result;
 }
 
 void isoDrive::FreeDirIterator(const int dirIterator) {
 	dirIterators[dirIterator].valid = false;
-	
+
 	// if this was the last aquired iterator decrement nextFreeIterator
 	if ((dirIterator + 1) % MAX_OPENDIRS == nextFreeDirIterator) {
 		if (nextFreeDirIterator>0) {
@@ -446,7 +461,7 @@ bool isoDrive::ReadCachedSector(Bit8u** buffer, const Bit32u sector) {
 	// get hash table entry
 	int pos = sector % ISO_MAX_HASH_TABLE_SIZE;
 	SectorHashEntry& he = sectorHashEntries[pos];
-	
+
 	// check if the entry is valid and contains the correct sector
 	if (!he.valid || he.sector != sector) {
 		if (!CDROM_Interface_Image::images[subUnit]->ReadSector(he.data, false, sector)) {
@@ -455,7 +470,7 @@ bool isoDrive::ReadCachedSector(Bit8u** buffer, const Bit32u sector) {
 		he.valid = true;
 		he.sector = sector;
 	}
-	
+
 	*buffer = he.data;
 	return true;
 }
@@ -464,30 +479,32 @@ inline bool isoDrive :: readSector(Bit8u *buffer, Bit32u sector) {
 	return CDROM_Interface_Image::images[subUnit]->ReadSector(buffer, false, sector);
 }
 
-int isoDrive :: readDirEntry(isoDirEntry *de, Bit8u *data) {	
+int isoDrive :: readDirEntry(isoDirEntry *de, Bit8u *data) {
 	// copy data into isoDirEntry struct, data[0] = length of DirEntry
 //	if (data[0] > sizeof(isoDirEntry)) return -1;//check disabled as isoDirentry is currently 258 bytes large. So it always fits
 	memcpy(de, data, data[0]);//Perharps care about a zero at the end.
-	
+
 	// xa not supported
 	if (de->extAttrLength != 0) return -1;
 	// interleaved mode not supported
 	if (de->fileUnitSize != 0 || de->interleaveGapSize != 0) return -1;
-	
+
 	// modify file identifier for use with dosbox
 	if ((de->length < 33 + de->fileIdentLength)) return -1;
 	if (IS_DIR(FLAGS2)) {
-		if (de->fileIdentLength == 1 && de->ident[0] == 0) strcpy((char*)de->ident, ".");
-		else if (de->fileIdentLength == 1 && de->ident[0] == 1) strcpy((char*)de->ident, "..");
+		if (de->fileIdentLength == 1 && de->ident[0] == 0)
+			strcpy(reinterpret_cast<char *>(de->ident), ".");
+		else if (de->fileIdentLength == 1 && de->ident[0] == 1)
+			strcpy(reinterpret_cast<char *>(de->ident), "..");
 		else {
 			if (de->fileIdentLength > 200) return -1;
 			de->ident[de->fileIdentLength] = 0;
 		}
 	} else {
 		if (de->fileIdentLength > 200) return -1;
-		de->ident[de->fileIdentLength] = 0;	
+		de->ident[de->fileIdentLength] = 0;
 		// remove any file version identifiers as there are some cdroms that don't have them
-		strreplace((char*)de->ident, ';', 0);	
+		strreplace((char*)de->ident, ';', 0);
 		// if file has no extension remove the trailing dot
 		size_t tmp = strlen((char*)de->ident);
 		if (tmp > 0) {
@@ -498,7 +515,10 @@ int isoDrive :: readDirEntry(isoDirEntry *de, Bit8u *data) {
 	if (dotpos!=NULL) {
 		if (strlen(dotpos)>4) dotpos[4]=0;
 		if (dotpos-(char*)de->ident>8) {
-			strcpy((char*)(&de->ident[8]),dotpos);
+			constexpr int pos = 8;
+			const auto maxlen = ARRAY_LEN(de->ident) - pos;
+			const auto sub_ident = reinterpret_cast<char *>(de->ident + pos);
+			snprintf(sub_ident, maxlen, "%s", dotpos);
 		}
 	} else if (strlen((char*)de->ident)>8) de->ident[8]=0;
 	return de->length;
@@ -523,24 +543,24 @@ bool isoDrive :: lookup(isoDirEntry *de, const char *path) {
 	if (!dataCD) return false;
 	*de = this->rootEntry;
 	if (!strcmp(path, "")) return true;
-	
+
 	char isoPath[ISO_MAXPATHNAME];
-	safe_strncpy(isoPath, path, ISO_MAXPATHNAME);
+	safe_strcpy(isoPath, path);
 	strreplace(isoPath, '\\', '/');
-	
+
 	// iterate over all path elements (name), and search each of them in the current de
 	for(char* name = strtok(isoPath, "/"); NULL != name; name = strtok(NULL, "/")) {
 
-		bool found = false;	
+		bool found = false;
 		// current entry must be a directory, abort otherwise
 		if (IS_DIR(FLAGS2)) {
-			
+
 			// remove the trailing dot if present
 			size_t nameLength = strlen(name);
 			if (nameLength > 0) {
 				if (name[nameLength - 1] == '.') name[nameLength - 1] = 0;
 			}
-			
+
 			// look for the current path element
 			int dirIterator = GetDirIterator(de);
 			while (!found && GetNextDirEntry(dirIterator, de)) {

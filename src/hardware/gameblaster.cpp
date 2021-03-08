@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -40,7 +40,8 @@ static Bit32u cmsBase;
 static saa1099_device* device[2];
 
 static void write_cms(Bitu port, Bitu val, Bitu /* iolen */) {
-	if(cms_chan && (!cms_chan->enabled)) cms_chan->Enable(true);
+	if (cms_chan && (!cms_chan->is_enabled))
+		cms_chan->Enable(true);
 	lastWriteTicks = PIC_Ticks;
 	switch ( port - cmsBase ) {
 	case 1:
@@ -117,16 +118,16 @@ static Bitu read_cms_detect(Bitu port, Bitu /* iolen */) {
 	return retval;
 }
 
-
-class CMS:public Module_base {
+class CMS : public Module_base {
 private:
-	IO_WriteHandleObject WriteHandler;
-	IO_WriteHandleObject DetWriteHandler;
-	IO_ReadHandleObject DetReadHandler;
-	MixerObject MixerChan;
+	IO_WriteHandleObject WriteHandler = {};
+	IO_WriteHandleObject DetWriteHandler = {};
+	IO_ReadHandleObject DetReadHandler = {};
+	MixerObject MixerChan = {};
 
 public:
-	CMS(Section* configuration):Module_base(configuration) {
+	CMS(Section *configuration) : Module_base(configuration)
+	{
 		Section_prop * section = static_cast<Section_prop *>(configuration);
 		Bitu sampleRate = section->Get_int( "oplrate" );
 		cmsBase = section->Get_hex("sbbase");
@@ -161,7 +162,6 @@ public:
 		delete device[1];
 	}
 };
-
 
 static CMS* test;
    

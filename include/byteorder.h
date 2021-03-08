@@ -1,7 +1,7 @@
 /*
  *  SPDX-License-Identifier: GPL-2.0-or-later
  *
- *  Copyright (C) 2020-2020  The dosbox-staging team
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 #ifndef DOSBOX_BYTEORDER_H
 #define DOSBOX_BYTEORDER_H
 
-/* Usual way of handling endianess and byteswapping is via endian.h
+/* Usual way of handling endianness and byteswapping is via endian.h
  * (for e.g. htole* functions) or byteswap.h (e.g. bswap_16 macro).
  *
  * However, these headers are non-standard and almost every OS has their own
@@ -40,7 +40,7 @@
 
 #if !defined(_MSC_VER)
 
-/* Aside of MSVC, every C++11-capable compiler provides __builtin_bswap*
+/* Aside of MSVC, every C++14-capable compiler provides __builtin_bswap*
  * as compiler intrinsics or builtin functions.
  */
 
@@ -68,7 +68,7 @@
 #define host_to_le16(x) bswap_u16(static_cast<uint16_t>(x))
 #define host_to_le32(x) bswap_u32(static_cast<uint32_t>(x))
 #define host_to_le64(x) bswap_u64(static_cast<uint64_t>(x))
-                                                           
+
 #define le16_to_host(x) bswap_u16(static_cast<uint16_t>(x))
 #define le32_to_host(x) bswap_u32(static_cast<uint32_t>(x))
 #define le64_to_host(x) bswap_u64(static_cast<uint64_t>(x))

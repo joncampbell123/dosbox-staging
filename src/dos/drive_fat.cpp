@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,19 +16,19 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "drives.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "dosbox.h"
-#include "dos_inc.h"
-#include "drives.h"
-#include "support.h"
-#include "cross.h"
-#include "bios.h"
 #include "bios_disk.h"
+#include "bios.h"
+#include "cross.h"
+#include "dos_inc.h"
+#include "string_utils.h"
+#include "support.h"
 
 #define IMGTYPE_FLOPPY 0
 #define IMGTYPE_ISO    1
@@ -584,7 +584,7 @@ Bit32u fatDrive::getAbsoluteSectFromChain(Bit32u startClustNum, Bit32u logicalSe
 			//LOG_MSG("End of cluster chain reached before end of logical sector seek!");
 			if (skipClust == 1 && fattype == FAT12) {
 				//break;
-				LOG(LOG_DOSMISC,LOG_ERROR)("End of cluster chain reached, but maybe good afterall ?");
+				LOG(LOG_DOSMISC, LOG_ERROR)("End of cluster chain reached, but maybe good after all ?");
 			}
 			return 0;
 		}
@@ -1042,8 +1042,22 @@ bool fatDrive::FileUnlink(char * name) {
 	direntry fileEntry;
 	Bit32u dirClust, subEntry;
 
-	if(!getFileDirEntry(name, &fileEntry, &dirClust, &subEntry)) return false;
+	if(!getFileDirEntry(name, &fileEntry, &dirClust, &subEntry)) {
+		DOS_SetError(DOSERR_FILE_NOT_FOUND);
+		return false;
+	}
+/*
+	Technically correct, but maybe an unwanted obstruction, so inactive for now.
 
+	if(fileEntry.attrib & (DOS_ATTR_SYSTEM | DOS_ATTR_HIDDEN)) {
+		DOS_SetError(DOSERR_FILE_NOT_FOUND);
+		return false;
+	}
+	if(fileEntry.attrib & DOS_ATTR_READ_ONLY) {
+		DOS_SetError(DOSERR_ACCESS_DENIED);
+		return false;
+	}
+*/
 	fileEntry.entryname[0] = 0xe5;
 	directoryChange(dirClust, &fileEntry, subEntry);
 
@@ -1505,4 +1519,3 @@ bool fatDrive::TestDir(char *dir) {
 	Bit32u dummyClust;
 	return getDirClustNum(dir, &dummyClust, false);
 }
-

@@ -1,58 +1,6 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
 # Precompiled Headers
 *.gch
 *.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# svn:ignore
-aclocal.m4
-autom4te.cache
-config.h
-config.h.in
-config.h.in~
-config.log
-config.status
-config.guess
-config.sub
-configure
-depcomp
-install-sh
-Makefile
-Makefile.in
-missing
-mkinstalldirs
-stamp-h1
-
-# autotools configuration ephemerals
-confdefs.h
-conftest.dir
 
 # Other
 compile
@@ -64,8 +12,13 @@ make.log
 *.defines
 missed.txt
 
+# Common names for meson build dirs
+build
+builddir
+
 # Visual Studio
 .vs
+.vscode
 
 # Common editor temp/backup files
 *~
@@ -89,3 +42,11 @@ suppress_base.json
 *.profraw.imports
 *.afdo
 *.afdo.imports
+
+# Intel optimization reports
+*.optrpt
+
+# clangd language server
+.clangd
+.cache
+compile_commands.json

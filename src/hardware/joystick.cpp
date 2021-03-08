@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,16 +16,15 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "joystick.h"
 
 #include <string.h>
 #include <math.h>
-#include "dosbox.h"
+
+#include "control.h"
 #include "inout.h"
-#include "setup.h"
-#include "joystick.h"
 #include "pic.h"
 #include "support.h"
-
 
 //TODO: higher axis can't be mapped. Find out why again
 
@@ -134,7 +133,7 @@ struct JoyStick {
 
 };
 
-JoystickType joytype;
+JoystickType joytype = JOY_UNSET;
 static JoyStick stick[2];
 
 static Bitu last_write = 0;
@@ -284,24 +283,45 @@ float JOYSTICK_GetMove_Y(Bitu which) {
 	return stick[1].ypos;
 }
 
-class JOYSTICK:public Module_base{
-private:
-	IO_ReadHandleObject ReadHandler;
-	IO_WriteHandleObject WriteHandler;
-public:
-	JOYSTICK(Section* configuration):Module_base(configuration){
-		Section_prop * section = static_cast<Section_prop *>(configuration);
-		const char * type = section->Get_string("joysticktype");
-		if (!strcasecmp(type,"none"))         joytype = JOY_NONE;
-		else if (!strcasecmp(type,"false"))   joytype = JOY_NONE;
-		else if (!strcasecmp(type,"auto"))    joytype = JOY_AUTO;
-		else if (!strcasecmp(type,"2axis"))   joytype = JOY_2AXIS;
-		else if (!strcasecmp(type,"4axis"))   joytype = JOY_4AXIS;
-		else if (!strcasecmp(type,"4axis_2")) joytype = JOY_4AXIS_2;
-		else if (!strcasecmp(type,"fcs"))     joytype = JOY_FCS;
-		else if (!strcasecmp(type,"ch"))      joytype = JOY_CH;
-		else joytype = JOY_AUTO;
+void JOYSTICK_ParseConfiguredType()
+{
+	const auto conf = control->GetSection("joystick");
+	const auto section = static_cast<Section_prop *>(conf);
+	const char *type = section->Get_string("joysticktype");
 
+	if (!strcasecmp(type, "none"))
+		joytype = JOY_NONE;
+	else if (!strcasecmp(type, "false"))
+		joytype = JOY_NONE;
+	else if (!strcasecmp(type, "auto"))
+		joytype = JOY_AUTO;
+	else if (!strcasecmp(type, "2axis"))
+		joytype = JOY_2AXIS;
+	else if (!strcasecmp(type, "4axis"))
+		joytype = JOY_4AXIS;
+	else if (!strcasecmp(type, "4axis_2"))
+		joytype = JOY_4AXIS_2;
+	else if (!strcasecmp(type, "fcs"))
+		joytype = JOY_FCS;
+	else if (!strcasecmp(type, "ch"))
+		joytype = JOY_CH;
+	else
+		joytype = JOY_AUTO;
+
+	assert(joytype != JOY_UNSET);
+}
+
+class JOYSTICK : public Module_base {
+private:
+	IO_ReadHandleObject ReadHandler = {};
+	IO_WriteHandleObject WriteHandler = {};
+
+public:
+	JOYSTICK(Section *configuration) : Module_base(configuration)
+	{
+		JOYSTICK_ParseConfiguredType();
+
+		const auto section = static_cast<Section_prop *>(configuration);
 		bool timed = section->Get_bool("timed");
 		if (timed) {
 			ReadHandler.Install(0x201,read_p201_timed,IO_MB);
@@ -325,6 +345,7 @@ public:
 		stick[0].deadzone = section->Get_int("deadzone");
 	}
 };
+
 static JOYSTICK* test;
 
 void JOYSTICK_Destroy(Section* sec) {

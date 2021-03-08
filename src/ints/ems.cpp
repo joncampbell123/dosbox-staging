@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,11 +16,12 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "dosbox.h"
+
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
 
-#include "dosbox.h"
 #include "callback.h"
 #include "mem.h"
 #include "paging.h"
@@ -53,6 +54,8 @@
 #define ENABLE_VCPI 1
 #define ENABLE_V86_STARTUP 0
 
+#define EMM_VOLATILE 0
+#define EMM_NONVOLATILE 1
 
 /* EMM errors */
 #define EMM_NO_ERROR			0x00
@@ -70,6 +73,7 @@
 #define EMM_PAGE_MAP_SAVED		0x8d
 #define EMM_NO_SAVED_PAGE_MAP	0x8e
 #define EMM_INVALID_SUB			0x8f
+#define EMM_ATTR_UNDEF			0x90
 #define EMM_FEAT_NOSUP			0x91
 #define EMM_MOVE_OVLAP			0x92
 #define EMM_MOVE_OVLAPI			0x97
@@ -434,15 +438,15 @@ static Bit8u EMM_SavePageMap(Bit16u handle) {
 }
 
 static Bit8u EMM_RestoreMappingTable(void) {
-	Bit8u result;
 	/* Move through the mappings table and setup mapping accordingly */
 	for (Bitu i=0;i<0x40;i++) {
 		/* Skip the pageframe */
 		if ((i>=EMM_PAGEFRAME/0x400) && (i<(EMM_PAGEFRAME/0x400)+EMM_MAX_PHYS)) continue;
-		result=EMM_MapSegment(i<<10,emm_segmentmappings[i].handle,emm_segmentmappings[i].page);
+		EMM_MapSegment(i << 10, emm_segmentmappings[i].handle,
+		               emm_segmentmappings[i].page);
 	}
 	for (Bitu i=0;i<EMM_MAX_PHYS;i++) {
-		result=EMM_MapPage(i,emm_mappings[i].handle,emm_mappings[i].page);
+		EMM_MapPage(i, emm_mappings[i].handle, emm_mappings[i].page);
 	}
 	return EMM_NO_ERROR;
 }
@@ -582,6 +586,32 @@ static Bit8u GetSetHandleName(void) {
 
 }
 
+static Bit8u GetSetHandleAttributes(void) {
+	switch (reg_al) {
+	case 0x00:	// Get handle attribubtes
+		if (!ValidHandle(reg_dx)) return EMM_INVALID_HANDLE;
+		reg_al = EMM_VOLATILE;	// We only support volatile
+		break;
+	case 0x01:	// Set handle attributes
+		if (!ValidHandle(reg_dx)) return EMM_INVALID_HANDLE;
+		switch (reg_bl) {
+		case EMM_VOLATILE:
+			break;
+		case EMM_NONVOLATILE:
+			return EMM_FEAT_NOSUP;
+		default:
+			return EMM_ATTR_UNDEF;
+		}
+		break;
+	case 0x02:	// Get attribute capability
+		reg_al = EMM_VOLATILE;	// We only support volatile
+		break;
+	default:
+		LOG(LOG_MISC,LOG_ERROR)("EMS:Call %2X Subfunction %2X not supported",reg_ah,reg_al);
+		return EMM_INVALID_SUB;			
+	}
+	return EMM_NO_ERROR;
+}
 
 static void LoadMoveRegion(PhysPt data,MoveRegion & region) {
 	region.bytes=mem_readd(data+0x0);
@@ -805,6 +835,9 @@ static Bitu INT67_Handler(void) {
 	case 0x51:	/* Reallocate Pages */
 		reg_ah=EMM_ReallocatePages(reg_dx,reg_bx);
 		break;
+	case 0x52: // Set/Get Handle attributes
+		reg_ah=GetSetHandleAttributes();
+		break;	
 	case 0x53: // Set/Get Handlename
 		reg_ah=GetSetHandleName();
 		break;
@@ -827,6 +860,29 @@ static Bitu INT67_Handler(void) {
 		// Set number of pages
 		reg_cx = EMM_MAX_PHYS;
 		reg_ah = EMM_NO_ERROR;
+		break;
+	case 0x59: // Get hardware information
+		reg_ah=EMM_NO_ERROR;
+		switch (reg_al) {
+		case 0x00:	// Get hardware configuration
+			{
+				PhysPt data=SegPhys(es)+reg_di;
+				mem_writew(data,0x0400); data+=2;		// 1 page is 1K paragraphs (16KB)
+				mem_writew(data,0x0000); data+=2;		// No alternate register sets
+				mem_writew(data,sizeof(emm_mappings)); data+=2;	// Context save area size
+				mem_writew(data,0x0000); data+=2;		// No DMA channels
+				mem_writew(data,0x0000);			// Always 0 for LIM standard
+			}
+			break;
+		case 0x01:	// get unallocated raw page count
+			reg_dx=(Bit16u)(MEM_TotalPages()/4);		//Not entirely correct but okay
+			reg_bx=EMM_GetFreePages();
+			break;
+		default:
+			LOG(LOG_MISC,LOG_ERROR)("EMS:Call 59 subfct %2X not supported",reg_al);
+			reg_ah=EMM_INVALID_SUB;
+			break;
+		}
 		break;
 	case 0x5A:              /* Allocate standard/raw Pages */
 		if (reg_al<=0x01) {
@@ -1309,12 +1365,8 @@ Bitu GetEMSType(Section_prop * section) {
 
 class EMS : public Module_base {
 private:
+	uint16_t ems_baseseg = 0;
 	DOS_Device *emm_device = nullptr;
-
-	/* location in protected unfreeable memory where the ems name and callback are
-	 * stored  32 bytes.*/
-	static Bit16u ems_baseseg;
-
 	RealPt old67_pointer = 0;
 	CALLBACK_HandlerObject call_vdma;
 	CALLBACK_HandlerObject call_vcpi;
@@ -1348,7 +1400,7 @@ public:
 		}
 		BIOS_ZeroExtendedSize(true);
 
-		if (!ems_baseseg) ems_baseseg=DOS_GetMemory(2);	//We have 32 bytes
+		ems_baseseg = DOS_GetMemory(2); // We have 32 bytes
 
 		/* Add a little hack so it appears that there is an actual ems device installed */
 		char const *emsname = "EMMXXXX0";
@@ -1484,6 +1536,3 @@ void EMS_Init(Section* sec) {
 	test = new EMS(sec);
 	sec->AddDestroyFunction(&EMS_ShutDown,true);
 }
-
-//Initialize static members
-Bit16u EMS::ems_baseseg = 0;

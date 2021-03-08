@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -107,13 +107,13 @@ public:
 		flags=PFLAG_READABLE|PFLAG_HASROM;
 	}
 	void writeb(PhysPt addr,Bitu val){
-		LOG(LOG_CPU,LOG_ERROR)("Write %x to rom at %x",val,addr);
+		LOG(LOG_CPU,LOG_ERROR)("Write %" sBitfs(x) " to rom at %x",val,addr);
 	}
 	void writew(PhysPt addr,Bitu val){
-		LOG(LOG_CPU,LOG_ERROR)("Write %x to rom at %x",val,addr);
+		LOG(LOG_CPU,LOG_ERROR)("Write %" sBitfs(x) " to rom at %x",val,addr);
 	}
 	void writed(PhysPt addr,Bitu val){
-		LOG(LOG_CPU,LOG_ERROR)("Write %x to rom at %x",val,addr);
+		LOG(LOG_CPU,LOG_ERROR)("Write %" sBitfs(x) " to rom at %x",val,addr);
 	}
 };
 
@@ -184,8 +184,9 @@ void MEM_BlockRead(PhysPt pt,void * data,Bitu size) {
 	}
 }
 
-void MEM_BlockWrite(PhysPt pt,void const * const data,Bitu size) {
-	Bit8u const * read = reinterpret_cast<Bit8u const * const>(data);
+void MEM_BlockWrite(PhysPt pt, const void *data, size_t size)
+{
+	const uint8_t *read = static_cast<const uint8_t *>(data);
 	while (size--) {
 		mem_writeb_inline(pt++,*read++);
 	}
@@ -525,14 +526,16 @@ static Bitu read_p92(Bitu port,Bitu iolen) {
 	return memory.a20.controlport | (memory.a20.enabled ? 0x02 : 0);
 }
 
-void RemoveEMSPageFrame(void) {
+void MEM_RemoveEMSPageFrame()
+{
 	/* Setup rom at 0xe0000-0xf0000 */
 	for (Bitu ct=0xe0;ct<0xf0;ct++) {
 		memory.phandlers[ct] = &rom_page_handler;
 	}
 }
 
-void PreparePCJRCartRom(void) {
+void MEM_PreparePCJRCartRom()
+{
 	/* Setup rom at 0xd0000-0xe0000 */
 	for (Bitu ct=0xd0;ct<0xe0;ct++) {
 		memory.phandlers[ct] = &rom_page_handler;
@@ -541,12 +544,14 @@ void PreparePCJRCartRom(void) {
 
 HostPt GetMemBase(void) { return MemBase; }
 
-class MEMORY:public Module_base{
+class MEMORY : public Module_base {
 private:
-	IO_ReadHandleObject ReadHandler;
-	IO_WriteHandleObject WriteHandler;
-public:	
-	MEMORY(Section* configuration):Module_base(configuration){
+	IO_ReadHandleObject ReadHandler{};
+	IO_WriteHandleObject WriteHandler{};
+
+public:
+	MEMORY(Section *configuration) : Module_base(configuration)
+	{
 		Bitu i;
 		Section_prop * section=static_cast<Section_prop *>(configuration);
 	
@@ -569,6 +574,9 @@ public:
 		}
 		memset((void*)MemBase, 0, memsize * 1024 * 1024);
 		memory.pages = (memsize * 1024 * 1024) / 4096;
+		LOG_MSG("MEMORY: Base address: %p", MemBase);
+		LOG_MSG("MEMORY: Using %d DOS memory pages (%u MiB)",
+		        static_cast<int>(memory.pages), memsize);
 
 		/* Allocate the data for the different page information blocks */
 		memory.phandlers = new (std::nothrow) PageHandler * [memory.pages];
@@ -608,14 +616,15 @@ public:
 		ReadHandler.Install(0x92,read_p92,IO_MB);
 		MEM_A20_Enable(false);
 	}
-	~MEMORY(){
+
+	~MEMORY()
+	{
 		delete [] MemBase;
 		delete [] memory.phandlers;
 		delete [] memory.mhandles;
 	}
-};	
+};
 
-	
 static MEMORY* test;	
 	
 static void MEM_ShutDown(Section * sec) {

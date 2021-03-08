@@ -1,6 +1,7 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
- *  OPL2/OPL3 emulation library
+ *  SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -17,37 +18,19 @@
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-
-/*
+/* OPL2/OPL3 emulation library
+ *
  * Originally based on ADLIBEMU.C, an AdLib/OPL2 emulation library by Ken Silverman
  * Copyright (C) 1998-2001 Ken Silverman
  * Ken Silverman's official web site: "http://www.advsys.net/ken"
  */
 
+#include "config.h"
+
+#include "types.h"
+
 
 #define fltype double
-
-/*
-	define Bits, Bitu, Bit32s, Bit32u, Bit16s, Bit16u, Bit8s, Bit8u here
-*/
-/*
-#include <stdint.h>
-typedef uintptr_t	Bitu;
-typedef intptr_t	Bits;
-typedef uint32_t	Bit32u;
-typedef int32_t		Bit32s;
-typedef uint16_t	Bit16u;
-typedef int16_t		Bit16s;
-typedef uint8_t		Bit8u;
-typedef int8_t		Bit8s;
-*/
-
-
-/*
-	define attribution that inlines/forces inlining of a function (optional)
-*/
-#define OPL_INLINE INLINE
-
 
 #undef NUM_CHANNELS
 #if defined(OPLTYPE_IS_OPL3)
@@ -60,9 +43,7 @@ typedef int8_t		Bit8s;
 
 
 #define FL05	((fltype)0.5)
-#define FL2		((fltype)2.0)
-#define PI		((fltype)3.1415926535897932384626433832795)
-
+#define FL2     ((fltype)2.0)
 
 #define FIXEDPT			0x10000		// fixed-point calculations using 16+16
 #define FIXEDPT_LFO		0x1000000	// fixed-point calculations using 8+24

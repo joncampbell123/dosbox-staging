@@ -1,4 +1,5 @@
-// license:BSD-3-Clause
+// SPDX-License-Identifier: BSD-3-Clause
+//
 // copyright-holders:Nicola Salmoria
 /***************************************************************************
 
@@ -143,34 +144,39 @@
 //When you go over this create sample
 #define RATE_MAX ( 1 << 30)
 
-sn76496_base_device::sn76496_base_device(
-		const machine_config &mconfig,
-		device_type type,
-		const char *tag,
-		int feedbackmask,
-		int noisetap1,
-		int noisetap2,
-		bool negate,
-		bool stereo,
-		int clockdivider,
-		bool ncr,
-		bool sega,
-		device_t *owner,
-		uint32_t clock)
-	: device_t(mconfig, type, tag, owner, clock)
-	, device_sound_interface(mconfig, *this)
-//	, m_ready_handler(*this)
-	, m_feedback_mask(feedbackmask)
-	, m_whitenoise_tap1(noisetap1)
-	, m_whitenoise_tap2(noisetap2)
-	, m_negate(negate)
-	, m_stereo(stereo)
-	, m_clock_divider(clockdivider)
-	, m_ncr_style_psg(ncr)
-	, m_sega_style_psg(sega)
-{
-}
-
+sn76496_base_device::sn76496_base_device(const machine_config &mconfig,
+                                         device_type type,
+                                         const char *tag,
+                                         int feedbackmask,
+                                         int noisetap1,
+                                         int noisetap2,
+                                         bool negate,
+                                         bool stereo,
+                                         int clockdivider,
+                                         bool ncr,
+                                         bool sega,
+                                         device_t *owner,
+                                         uint32_t clock)
+        : device_t(mconfig, type, tag, owner, clock),
+          device_sound_interface(mconfig, *this),
+          m_ready_state(false),
+          m_feedback_mask(feedbackmask),
+          m_whitenoise_tap1(noisetap1),
+          m_whitenoise_tap2(noisetap2),
+          m_negate(negate),
+          m_stereo(stereo),
+          m_clock_divider(clockdivider),
+          m_ncr_style_psg(ncr),
+          m_sega_style_psg(sega),
+          m_last_register(0),
+          m_RNG(0),
+          m_current_clock(0),
+          m_stereo_mask(0x0),
+          m_cycles_to_ready(0),
+          sample_rate(0),
+          rate_add(0),
+          rate_counter(0)
+{}
 
 sn76496_device::sn76496_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: sn76496_base_device(mconfig, SN76496, tag, 0x10000, 0x04, 0x08, false, false, 8, false, true, owner, clock)
@@ -427,13 +433,10 @@ void sn76496_base_device::sound_stream_update(sound_stream &stream, stream_sampl
 				// if noisemode is 1, both taps are enabled
 				// if noisemode is 0, the lower tap, whitenoisetap2, is held at 0
 				// The != was a bit-XOR (^) before
-				if (((m_RNG & m_whitenoise_tap1)!=0) != (((m_RNG & m_whitenoise_tap2)!=(m_ncr_style_psg?m_whitenoise_tap2:0)) && in_noise_mode()))
-				{
+				if (((m_RNG & m_whitenoise_tap1) != 0) != ((static_cast<int32_t>(m_RNG & m_whitenoise_tap2) != (m_ncr_style_psg ? m_whitenoise_tap2 : 0)) && in_noise_mode())) {
 					m_RNG >>= 1;
 					m_RNG |= m_feedback_mask;
-				}
-				else
-				{
+				} else {
 					m_RNG >>= 1;
 				}
 				m_output[3] = m_RNG & 1;

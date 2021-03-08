@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -22,13 +22,13 @@
 #include <cassert>
 #include <utility>
 
-#include "dosbox.h"
 #include "callback.h"
 #include "regs.h"
 #include "mem.h"
 #include "dos_inc.h" /* for Drives[] */
 #include "drives.h"
 #include "mapper.h"
+#include "string_utils.h"
 
 diskGeo DiskGeometryList[] = {
 	{ 160,  8, 1, 40, 0},
@@ -201,26 +201,28 @@ Bit8u imageDisk::Write_AbsoluteSector(Bit32u sectnum, void *data) {
 
 }
 
-imageDisk::imageDisk(FILE *imgFile, const char *imgName, Bit32u imgSizeK, bool isHardDisk) {
-	heads = 0;
-	cylinders = 0;
-	sectors = 0;
-	sector_size = 512;
-	current_fpos = 0;
-	last_action = NONE;
-	diskimg = imgFile;
+imageDisk::imageDisk(FILE *img_file, const char *img_name, uint32_t img_size_k, bool is_hdd)
+        : hardDrive(is_hdd),
+          active(false),
+          diskimg(img_file),
+          floppytype(0),
+          sector_size(512),
+          heads(0),
+          cylinders(0),
+          sectors(0),
+          current_fpos(0),
+          last_action(NONE)
+{
 	fseek(diskimg,0,SEEK_SET);
 	memset(diskname,0,512);
-	safe_strncpy(diskname, imgName, sizeof(diskname));
-	active = false;
-	hardDrive = isHardDisk;
-	if(!isHardDisk) {
+	safe_strcpy(diskname, img_name);
+	if (!is_hdd) {
 		Bit8u i=0;
 		bool founddisk = false;
 		while (DiskGeometryList[i].ksize!=0x0) {
-			if ((DiskGeometryList[i].ksize==imgSizeK) ||
-				(DiskGeometryList[i].ksize+1==imgSizeK)) {
-				if (DiskGeometryList[i].ksize!=imgSizeK)
+			if ((DiskGeometryList[i].ksize == img_size_k) ||
+			    (DiskGeometryList[i].ksize + 1 == img_size_k)) {
+				if (DiskGeometryList[i].ksize != img_size_k)
 					LOG_MSG("ImageLoader: image file with additional data, might not load!");
 				founddisk = true;
 				active = true;
@@ -286,7 +288,7 @@ static Bit8u GetDosDriveNumber(Bit8u biosNum) {
 
 static bool driveInactive(Bit8u driveNum) {
 	if(driveNum>=(2 + MAX_HDD_IMAGES)) {
-		LOG(LOG_BIOS,LOG_ERROR)("Disk %d non-existant", driveNum);
+		LOG(LOG_BIOS,LOG_ERROR)("Disk %d non-existent", driveNum);
 		last_status = 0x01;
 		CALLBACK_SCF(true);
 		return true;
@@ -602,7 +604,8 @@ void BIOS_SetupDisks(void) {
 /* Setup the Bios Area */
 	mem_writeb(BIOS_HARDDISK_COUNT,2);
 
-	MAPPER_AddHandler(swapInNextDisk,MK_f4,MMOD1,"swapimg","Swap Image");
+	MAPPER_AddHandler(swapInNextDisk, SDL_SCANCODE_F4, MMOD1, "swapimg",
+	                  "Swap Image");
 	killRead = false;
 	swapping_requested = false;
 }

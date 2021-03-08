@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -76,8 +76,10 @@ static struct {
 
 class opcode {
 public:
-	opcode(void) : is_word(false), imm_size(0), rex(0) {}
-	opcode(int reg,bool dword=true,Bitu acc=1) : is_word(!dword), imm_size(0), rex(0) {
+	opcode() = default;
+
+	opcode(int reg, bool dword = true, Bitu acc = 1) : is_word(!dword)
+	{
 		setreg(reg, acc);
 	}
 
@@ -95,13 +97,15 @@ public:
 	void Emit16(Bit16u op);
 
 private:
-	bool is_word;
-	int reg;
-	Bit64u imm;
-	int imm_size;
+	bool is_word = false;
+	int reg = 0;
+	uint64_t imm = 0;
+	int imm_size = 0;
+	uint8_t rex = 0;
+	uint8_t modrm = 0;
+	uint8_t sib = 0;
 
-	Bit8u rex, modrm, sib;
-	Bits offset;
+	Bits offset = 0;
 
 	void EmitImm(void) {
 		switch(imm_size) {
@@ -124,7 +128,7 @@ private:
 					else { // try 32-bit absolute address
 						if ((Bit32s)offset != offset) IllegalOption("opcode::Emit: bad RIP address");
 						// change emitted modrm base from 5 to 4 (use sib)
-						cache.pos[-1] -= 1; 
+						cache_addb(modrm-1,cache.pos-1);
 						cache_addb(0x25); // sib: [none+1*none+simm32]
 					}
 				} else if ((modrm&7)!=4 || (sib&7)!=5)
@@ -228,9 +232,14 @@ opcode& opcode::setea(int rbase, int rscale, Bitu scale, Bits off) {
 
 class GenReg {
 public:
-	GenReg(Bit8u _index) : index(_index) {
-		notusable=false;dynreg=0;
+	GenReg(uint8_t reg_index)
+	        : dynreg(nullptr),
+	          last_used(0),
+	          index(reg_index),
+	          notusable(false)
+	{
 	}
+
 	DynReg  * dynreg;
 	Bitu last_used;			//Keeps track of last assigned regs 
 	const Bit8u index;
@@ -269,21 +278,25 @@ public:
 	}
 };
 
-static BlockReturn gen_runcodeInit(Bit8u *code);
-static BlockReturn (*gen_runcode)(Bit8u *code) = gen_runcodeInit;
+static BlockReturn gen_runcodeInit(const Bit8u *code);
+static BlockReturn (*gen_runcode)(const Bit8u *code) = gen_runcodeInit;
 
-static BlockReturn gen_runcodeInit(uint8_t *code)
-{
-	Bit8u* oldpos = cache.pos;
+static BlockReturn gen_runcodeInit(const Bit8u *code) {
+	const Bit8u* oldpos = cache.pos;
 	cache.pos = &cache_code_link_blocks[128];
-	gen_runcode = (BlockReturn(*)(Bit8u*))cache.pos;
+	gen_runcode = (BlockReturn(*)(const Bit8u*))cache.pos;
 
 	opcode(5).Emit8Reg(0x50);  // push rbp
 	opcode(15).Emit8Reg(0x50); // push r15
 	opcode(14).Emit8Reg(0x50); // push r14
+
 	// mov rbp, &cpu_regs
-	if ((Bit32u)(Bitu)&cpu_regs == (Bitu)&cpu_regs) opcode(5).setimm((Bitu)&cpu_regs,4).Emit8Reg(0xB8);
-	else opcode(5).set64().setimm((Bitu)&cpu_regs,8).Emit8Reg(0xB8);
+	const auto regs_addr = reinterpret_cast<uintptr_t>(&cpu_regs);
+	if (regs_addr > UINT32_MAX) // above 4 GiB
+		opcode(5).set64().setimm(regs_addr, 8).Emit8Reg(0xB8);
+	else
+		opcode(5).setimm(regs_addr, 4).Emit8Reg(0xB8);
+
 	opcode(13).Emit8Reg(0x50); // push r13
 	opcode(12).Emit8Reg(0x50); // push r12
 	opcode(3).Emit8Reg(0x50);  // push rbx
@@ -295,7 +308,7 @@ static BlockReturn gen_runcodeInit(uint8_t *code)
 	opcode(15).set64().setrm(4).Emit8(0x8B);  // mov r15, rsp
 	opcode(0).setimm(FMASK_TEST,4).Emit8Reg(0x25); // and eax, FMASK_TEST
 	cache_addb(0x48);cache_addw(0x158D); // lea rdx, [rip+simm32]
-	Bit8u *diff = cache.pos;
+	const Bit8u *diff = cache.pos;
 	cache_addd(0);
 	opcode(4).set64().setrm(4).setimm(~15,1).Emit8(0x83); // and rsp, ~15
 	opcode(15).Emit8Reg(0x50);  // push r15
@@ -304,7 +317,7 @@ static BlockReturn gen_runcodeInit(uint8_t *code)
 	opcode(0).setea(4,-1,0,CALLSTACK).Emit8(0x89);  // mov [rsp+8/40], eax
 	opcode(4).setrm(ARG0_REG).Emit8(0xFF);   // jmp ARG0
 
-	host_writed(diff, cache.pos - diff - sizeof(uint32_t));
+	cache_addd((Bit32u)(cache.pos - diff - 4),diff);
 	// eax = return value, ecx = flags
 	opcode(1).setea(5,-1,0,offsetof(CPU_Regs,flags)).Emit8(0x33); // xor ecx, reg_flags
 	opcode(4).setrm(1).setimm(FMASK_TEST,4).Emit8(0x81);          // and ecx,FMASK_TEST
@@ -1024,6 +1037,9 @@ static void gen_call_ptr(void *func=NULL, Bit8u ptr=0) {
 	x64gen.regs[X64_REG_R9]->Clear();
 	x64gen.regs[X64_REG_R10]->Clear();
 	x64gen.regs[X64_REG_R11]->Clear();
+	/* Make sure reg_esp is current */
+	if (DynRegs[G_ESP].flags & DYNFLG_CHANGED)
+		DynRegs[G_ESP].genreg->Save();
 
 	/* Do the actual call to the procedure */
 	if (func!=NULL) {
@@ -1128,35 +1144,33 @@ static void gen_call_write(DynReg * dr,Bit32u val,Bitu write_size) {
 	gen_call_ptr(func);
 }
 
-static Bit8u * gen_create_branch(BranchTypes type) {
+static const Bit8u * gen_create_branch(BranchTypes type) {
 	/* First free all registers */
 	cache_addw(0x70+type);
 	return (cache.pos-1);
 }
 
-static void gen_fill_branch(Bit8u * data,Bit8u * from=cache.pos) {
+static void gen_fill_branch(const Bit8u * data,const Bit8u * from=cache.pos) {
 #if C_DEBUG
 	Bits len=from-data-1;
 	if (len<0) len=~len;
 	if (len>127)
-		LOG_MSG("Big jump %d",len);
+		LOG_MSG("Big jump %" sBitfs(d),len);
 #endif
-	*data=(Bit8u)(from-data-1);
+	cache_addb((Bit8u)(from-data-1),data);
 }
 
-static Bit8u * gen_create_branch_long(BranchTypes type) {
+static const Bit8u * gen_create_branch_long(BranchTypes type) {
 	cache_addw(0x800f+(type<<8));
 	cache_addd(0);
 	return (cache.pos-4);
 }
 
-static void gen_fill_branch_long(uint8_t *data, uint8_t *from = cache.pos)
-{
-	host_writed(data, from - data - sizeof(uint32_t));
+static void gen_fill_branch_long(const Bit8u * data,const Bit8u * from=cache.pos) {
+	cache_addd((Bit32u)(from-data-4),data);
 }
 
-static uint8_t *gen_create_jump(uint8_t *to = 0)
-{
+static const Bit8u * gen_create_jump(const Bit8u * to=0) {
 	/* First free all registers */
 	cache_addb(0xe9);
 	cache_addd(to - cache.pos - sizeof(uint32_t));
@@ -1164,24 +1178,18 @@ static uint8_t *gen_create_jump(uint8_t *to = 0)
 }
 
 #if 0
-static void gen_fill_jump(uint8_t *data, uint8_t *to = cache.pos) {
-	host_writed(data, to - data - sizeof(uint32_t));
+static void gen_fill_jump(const Bit8u * data,const Bit8u * to=cache.pos) {
+	gen_fill_branch_long(data,to);
 }
 #endif
 
-static Bit8u * gen_create_short_jump(void) {
+static const Bit8u * gen_create_short_jump(void) {
 	cache_addw(0x00EB);
 	return cache.pos-1;
 }
 
-static void gen_fill_short_jump(Bit8u * data, Bit8u * to=cache.pos) {
-#if C_DEBUG
-	Bits len=to-data-1;
-	if (len<0) len=~len;
-	if (len>127)
-		LOG_MSG("Big jump %d",len);
-#endif
-	data[0] = (Bit8u)(to-data-1);
+static void gen_fill_short_jump(const Bit8u * data, const Bit8u * to=cache.pos) {
+	gen_fill_branch(data,to);
 }
 
 static void gen_jmp_ptr(void * _ptr,Bit32s imm=0) {
@@ -1261,7 +1269,7 @@ static void (*gen_dh_fpu_save)(void)  = gen_dh_fpu_saveInit;
 
 // DO NOT USE opcode::setabsaddr IN THIS FUNCTION (RBP unavailable at execution time)
 static void gen_dh_fpu_saveInit(void) {
-	Bit8u* oldpos = cache.pos;
+	const Bit8u* oldpos = cache.pos;
 	cache.pos = &cache_code_link_blocks[64];
 	gen_dh_fpu_save = (void(*)(void))cache.pos;
 
@@ -1284,4 +1292,3 @@ static void gen_dh_fpu_saveInit(void) {
 	gen_dh_fpu_save();
 }
 #endif
-

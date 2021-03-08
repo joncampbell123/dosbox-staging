@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,8 +16,10 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#include "dos_system.h"
 
 #include <string.h>
+
 #include "dosbox.h"
 #include "callback.h"
 #include "regs.h"
@@ -25,41 +27,39 @@
 #include "bios.h"
 #include "dos_inc.h"
 #include "support.h"
-#include "drives.h" //Wildcmp
-/* Include all the devices */
-
+#include "drives.h"
 #include "dev_con.h"
-
 
 DOS_Device * Devices[DOS_DEVICES];
 
 class device_NUL : public DOS_Device {
 public:
-	device_NUL() { SetName("NUL"); };
-	virtual bool Read(Bit8u * data,Bit16u * size) {
+	device_NUL() { SetName("NUL"); }
+
+	virtual bool Read(Bit8u * /*data*/,Bit16u * size) {
 		*size = 0; //Return success and no data read. 
 		LOG(LOG_IOCTL,LOG_NORMAL)("%s:READ",GetName());
 		return true;
 	}
-	virtual bool Write(Bit8u * data,Bit16u * size) {
+	virtual bool Write(Bit8u * /*data*/,Bit16u * /*size*/) {
 		LOG(LOG_IOCTL,LOG_NORMAL)("%s:WRITE",GetName());
 		return true;
 	}
-	virtual bool Seek(Bit32u * pos,Bit32u type) {
+	virtual bool Seek(Bit32u * /*pos*/,Bit32u /*type*/) {
 		LOG(LOG_IOCTL,LOG_NORMAL)("%s:SEEK",GetName());
 		return true;
 	}
 	virtual bool Close() { return true; }
 	virtual Bit16u GetInformation(void) { return 0x8084; }
-	virtual bool ReadFromControlChannel(PhysPt bufptr,Bit16u size,Bit16u * retcode){return false;}
-	virtual bool WriteToControlChannel(PhysPt bufptr,Bit16u size,Bit16u * retcode){return false;}
+	virtual bool ReadFromControlChannel(PhysPt /*bufptr*/,Bit16u /*size*/,Bit16u * /*retcode*/){return false;}
+	virtual bool WriteToControlChannel(PhysPt /*bufptr*/,Bit16u /*size*/,Bit16u * /*retcode*/){return false;}
 };
 
 class device_LPT1 : public device_NUL {
 public:
    	device_LPT1() { SetName("LPT1");}
 	Bit16u GetInformation(void) { return 0x80A0; }
-	bool Read(Bit8u* data,Bit16u * size){
+	bool Read(Bit8u* /*data*/,Bit16u * /*size*/){
 		DOS_SetError(DOSERR_ACCESS_DENIED);
 		return false;
 	}	
@@ -93,20 +93,6 @@ bool DOS_Device::WriteToControlChannel(PhysPt bufptr,Bit16u size,Bit16u * retcod
 	return Devices[devnum]->WriteToControlChannel(bufptr,size,retcode);
 }
 
-DOS_File::DOS_File(const DOS_File& orig) {
-	flags=orig.flags;
-	time=orig.time;
-	date=orig.date;
-	attr=orig.attr;
-	refCtr=orig.refCtr;
-	open=orig.open;
-	hdrive=orig.hdrive;
-	name=0;
-	if(orig.name) {
-		name=new char [strlen(orig.name) + 1];strcpy(name,orig.name);
-	}
-}
-
 DOS_File & DOS_File::operator= (const DOS_File & orig) {
 	flags=orig.flags;
 	time=orig.time;
@@ -114,13 +100,9 @@ DOS_File & DOS_File::operator= (const DOS_File & orig) {
 	attr=orig.attr;
 	refCtr=orig.refCtr;
 	open=orig.open;
+	newtime = orig.newtime;
 	hdrive=orig.hdrive;
-	if(name) {
-		delete [] name; name=0;
-	}
-	if(orig.name) {
-		name=new char [strlen(orig.name) + 1];strcpy(name,orig.name);
-	}
+	name = orig.name;
 	return *this;
 }
 
@@ -140,18 +122,21 @@ Bit8u DOS_FindDevice(char const * name) {
 	char* dot = strrchr(name_part,'.');
 	if(dot) *dot = 0; //no ext checking
 
-	static char com[5] = { 'C','O','M','1',0 };
-	static char lpt[5] = { 'L','P','T','1',0 };
 	// AUX is alias for COM1 and PRN for LPT1
 	// A bit of a hack. (but less then before).
 	// no need for casecmp as makename returns uppercase
-	if (strcmp(name_part, "AUX") == 0) name_part = com;
-	if (strcmp(name_part, "PRN") == 0) name_part = lpt;
+	static char com[] = "COM1";
+	static char lpt[] = "LPT1";
+	if (strcmp(name_part, "AUX") == 0)
+		name_part = com;
+	if (strcmp(name_part, "PRN") == 0)
+		name_part = lpt;
 
 	/* loop through devices */
 	for(Bit8u index = 0;index < DOS_DEVICES;index++) {
 		if (Devices[index]) {
-			if (WildFileCmp(name_part,Devices[index]->name)) return index;
+			if (WildFileCmp(name_part, Devices[index]->GetName()))
+				return index;
 		}
 	}
 	return DOS_DEVICES;
@@ -175,7 +160,7 @@ void DOS_DelDevice(DOS_Device * dev) {
 // We will destroy the device if we find it in our list.
 // TODO:The file table is not checked to see the device is opened somewhere!
 	for (Bitu i = 0; i <DOS_DEVICES;i++) {
-		if(Devices[i] && !strcasecmp(Devices[i]->name,dev->name)){
+		if (Devices[i] && !strcasecmp(Devices[i]->GetName(), dev->GetName())) {
 			delete Devices[i];
 			Devices[i] = 0;
 			return;

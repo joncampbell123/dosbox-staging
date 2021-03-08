@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <string>
+#include <ctime>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -44,7 +45,6 @@
 #if defined (WIN32)
 #define CROSS_FILENAME(blah) 
 #define CROSS_FILESPLIT '\\'
-#define F_OK 0
 #else
 #define	CROSS_FILENAME(blah) strreplace(blah,'\\','/')
 #define CROSS_FILESPLIT '/'
@@ -70,13 +70,23 @@
 #define cross_fileno(s) fileno(s)
 #endif
 
-//Solaris maybe others
-#if defined (DB_HAVE_NO_POWF)
-#include <math.h>
-static inline float powf (float x, float y) { return (float) pow (x,y); }
+namespace cross {
+
+#if defined(WIN32)
+
+struct tm *localtime_r(const time_t *timep, struct tm *result);
+
+#else
+
+constexpr auto localtime_r = ::localtime_r;
+
 #endif
 
+} // namespace cross
+
 void CROSS_DetermineConfigPaths();
+std::string CROSS_GetPlatformConfigDir();
+std::string CROSS_ResolveHome(const std::string &str);
 
 class Cross {
 public:
@@ -84,7 +94,6 @@ public:
 	static void GetPlatformConfigName(std::string& in);
 	static void CreatePlatformConfigDir(std::string& in);
 	static void ResolveHomedir(std::string & temp_line);
-	static void CreateDir(std::string const& temp);
 	static bool IsPathAbsolute(std::string const& in);
 };
 

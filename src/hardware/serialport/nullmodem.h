@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -35,30 +35,32 @@
 
 class CNullModem : public CSerial {
 public:
-	CNullModem(Bitu id, CommandLine* cmd);
+	CNullModem(const CNullModem &) = delete;            // prevent copying
+	CNullModem &operator=(const CNullModem &) = delete; // prevent assignment
+
+	CNullModem(const uint8_t port_idx, CommandLine *cmd);
 	~CNullModem();
 
-	void updatePortConfig(Bit16u divider, Bit8u lcr);
+	void updatePortConfig(uint16_t divider, uint8_t lcr);
 	void updateMSR();
-	void transmitByte(Bit8u val, bool first);
+	void transmitByte(uint8_t val, bool first);
 	void setBreak(bool value);
 	
 	void setRTSDTR(bool rts, bool dtr);
 	void setRTS(bool val);
 	void setDTR(bool val);
-	void handleUpperEvent(Bit16u type);
+	void handleUpperEvent(uint16_t type);
 
 private:
-	TCPServerSocket* serversocket;
-	TCPClientSocket* clientsocket;
+	TCPServerSocket *serversocket = nullptr;
+	TCPClientSocket *clientsocket = nullptr;
 
-	bool receiveblock;		// It's not a block of data it rather blocks
-	Bit16u serverport;		// we are a server if this is nonzero
-	Bit16u clientport;
+	uint16_t serverport = 0; // we are a server if this is nonzero
+	uint16_t clientport = 0;
 
-	Bit8u hostnamebuffer[128]; // the name passed to us by the user
+	uint8_t hostnamebuffer[128] = {0}; // the name passed to us by the user
 
-	Bitu rx_state;
+	uint32_t rx_state = 0;
 #define N_RX_IDLE		0
 #define N_RX_WAIT		1
 #define N_RX_BLOCKED	2
@@ -70,49 +72,48 @@ private:
 	bool ServerListen();
 	bool ServerConnect();
     void Disconnect();
-	Bits readChar();
-	void WriteChar(Bit8u data);
+    SocketState readChar(uint8_t &val);
+    void WriteChar(uint8_t data);
 
-	bool DTR_delta;		// with dtrrespect, we try to establish a connection
-						// whenever DTR switches to 1. This variable is
-						// used to remember the old state.
+	bool DTR_delta = false; // with dtrrespect, we try to establish a
+	                        // connection whenever DTR switches to 1. This
+	                        // variable is used to remember the old state.
 
-	bool tx_block;		// true while the SERIAL_TX_REDUCTION event
-						// is pending
+	bool tx_block = false; // true while the SERIAL_TX_REDUCTION event
+	                       // is pending
 
-	Bitu rx_retry;		// counter of retries
+	uint32_t rx_retry = 0; // counter of retries
 
-	Bitu rx_retry_max;	// how many POLL_EVENTS to wait before causing
-						// a overrun error.
+	uint32_t rx_retry_max = 0; // how many POLL_EVENTS to wait before
+	                           // causing a overrun error.
 
-	Bitu tx_gather;		// how long to gather tx data before
-						// sending all of them [milliseconds]
+	uint32_t tx_gather = 0; // how long to gather tx data before
+	                        // sending all of them [milliseconds]
 
-	
-	bool dtrrespect;	// dtr behavior - only send data to the serial
-						// port when DTR is on
+	bool dtrrespect = false; // dtr behavior - only send data to the serial
+	                         // port when DTR is on
 
-	bool transparent;	// if true, don't send 0xff 0xXX to toggle
-						// DSR/CTS.
+	bool transparent = false; // if true, don't send 0xff 0xXX to toggle
+	                          // DSR/CTS.
 
-	bool telnet;		// Do Telnet parsing.
+	bool telnet = false; // Do Telnet parsing.
 
-	// Telnet's brain
+    // Telnet's brain
 #define TEL_CLIENT 0
 #define TEL_SERVER 1
 
-	Bits TelnetEmulation(Bit8u data);
+	SocketState TelnetEmulation(const uint8_t data);
 
 	// Telnet's memory
 	struct {
-		bool binary[2];
-		bool echo[2];
-		bool supressGA[2];
-		bool timingMark[2];
-					
-		bool inIAC;
-		bool recCommand;
-		Bit8u command;
+		bool binary[2] = {false};
+		bool echo[2] = {false};
+		bool supressGA[2] = {false};
+		bool timingMark[2] = {false};
+
+		bool inIAC = false;
+		bool recCommand = false;
+		uint8_t command = 0;
 	} telClient;
 };
 

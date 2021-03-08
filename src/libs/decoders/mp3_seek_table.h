@@ -1,16 +1,8 @@
 /*
- * DOSBox MP3 Seek Table Handler
- * -----------------------------
- * See mp3_seek_table.cpp for more documentation.
+ *  SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The seek table handler makes use of the following single-header
- * public libraries:
- *   - dr_mp3: http://mackron.github.io/dr_mp3.html, by David Reid
- *   - archive: https://github.com/voidah/archive, by Arthur Ouellet
- *   - xxHash: http://cyan4973.github.io/xxHash, by Yann Collet
- *
- *  Copyright (C) 2020       The DOSBox Team
- *  Copyright (C) 2018-2019  Kevin R. Croft <krcroft@gmail.com>
+ *  Copyright (C) 2020-2021  The DOSBox Staging Team
+ *  Copyright (C) 2018-2021  Kevin R. Croft <krcroft@gmail.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -26,6 +18,22 @@
  *  with this program; if not, write to the Free Software Foundation, Inc.,
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
+
+#ifndef DOSBOX_MP3_SEEK_TABLE_H
+#define DOSBOX_MP3_SEEK_TABLE_H
+
+/* DOSBox MP3 Seek Table Handler
+ * -----------------------------
+ * See mp3_seek_table.cpp for more documentation.
+ *
+ * The seek table handler makes use of the following single-header
+ * public libraries:
+ *   - dr_mp3: http://mackron.github.io/dr_mp3.html, by David Reid
+ *   - archive: https://github.com/voidah/archive, by Arthur Ouellet
+ *   - xxHash: http://cyan4973.github.io/xxHash, by Yann Collet
+ */
+
+#include "config.h"
 
 #include <vector>    // provides: vector
 #include <SDL.h>     // provides: SDL_RWops
@@ -55,11 +63,13 @@ struct drmp3_seek_point_serial {
 //   - a pointer to the working dr_mp3 instance
 //   - a template vector of seek_points (the serializeable form)
 struct mp3_t {
-    drmp3* p_dr;    // the actual drmp3 instance we open, read, and seek within
-    std::vector<drmp3_seek_point_serial> seek_points_vector;
+    drmp3* p_dr = nullptr;    // the actual drmp3 instance we open, read, and seek within
+    std::vector<drmp3_seek_point_serial> seek_points_vector = {};
 };
 
 uint64_t populate_seek_points(struct SDL_RWops* const context,
                               mp3_t* p_mp3,
                               const char* seektable_filename,
                               bool &result);
+
+#endif

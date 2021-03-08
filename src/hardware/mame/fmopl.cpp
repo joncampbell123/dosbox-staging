@@ -1,4 +1,5 @@
-// license:GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
 // copyright-holders:Jarek Burczynski,Tatsuyuki Satoh
 /*
 **
@@ -394,8 +395,8 @@ struct FM_OPL
 	//attotime TimerBase;         /* Timer base time (==sampling time)*/
 	device_t *device;
 
-	signed int phase_modulation;    /* phase modulation input (SLOT 2) */
-	signed int output[1];
+	int32_t phase_modulation;     /* phase modulation input (SLOT 2) */
+	int32_t output[1];
 #if BUILD_Y8950
 	int32_t output_deltat[4];     /* for Y8950 DELTA-T, chip is mono, that 4 here is just for safety */
 #endif
@@ -1353,7 +1354,8 @@ int FM_OPL::init_tables()
 	for (i=0; i<SIN_LEN; i++)
 	{
 		/* non-standard sinus */
-		m = sin(((i*2)+1) * M_PI / SIN_LEN); /* checked against the real chip */
+		m = sin(((i * 2) + 1) * M_PI / SIN_LEN); /* checked against the
+		                                          real chip */
 
 		/* we never reach zero here due to ((i*2)+1) */
 

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,7 +15,6 @@
  *  with this program; if not, write to the Free Software Foundation, Inc.,
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
-
 
 static void gen_init(void);
 
@@ -84,7 +83,7 @@ public:
 	}
 };
 
-static BlockReturn gen_runcode(Bit8u * code) {
+static BlockReturn gen_runcode(const Bit8u * code) {
 	BlockReturn retval;
 #if defined (_MSC_VER)
 	__asm {
@@ -871,6 +870,9 @@ static void gen_call_function(void * func,char const* ops,...) {
 	/* Clear some unprotected registers */
 	x86gen.regs[X86_REG_ECX]->Clear();
 	x86gen.regs[X86_REG_EDX]->Clear();
+	/* Make sure reg_esp is current */
+	if (DynRegs[G_ESP].flags & DYNFLG_CHANGED)
+		DynRegs[G_ESP].genreg->Save();
 	/* Do the actual call to the procedure */
 	cache_addb(0xe8);
 	cache_addd((Bit32u)func - (Bit32u)cache.pos-4);
@@ -942,6 +944,9 @@ static void gen_call_write(DynReg * dr,Bit32u val,Bitu write_size) {
 	/* Clear some unprotected registers */
 	x86gen.regs[X86_REG_ECX]->Clear();
 	x86gen.regs[X86_REG_EDX]->Clear();
+	/* Make sure reg_esp is current */
+	if (DynRegs[G_ESP].flags & DYNFLG_CHANGED)
+		DynRegs[G_ESP].genreg->Save();
 	/* Do the actual call to the procedure */
 	cache_addb(0xe8);
 	switch (write_size) {
@@ -962,40 +967,40 @@ static void gen_call_write(DynReg * dr,Bit32u val,Bitu write_size) {
 #endif
 }
 
-static Bit8u * gen_create_branch(BranchTypes type) {
+static const Bit8u * gen_create_branch(BranchTypes type) {
 	/* First free all registers */
 	cache_addw(0x70+type);
 	return (cache.pos-1);
 }
 
-static void gen_fill_branch(Bit8u * data,Bit8u * from=cache.pos) {
+static void gen_fill_branch(const Bit8u * data,const Bit8u * from=cache.pos) {
 #if C_DEBUG
 	Bits len=from-data;
 	if (len<0) len=-len;
 	if (len>126) LOG_MSG("Big jump %d",len);
 #endif
-	*data=(from-data-1);
+	cache_addb((Bit8u)(from-data-1),data);
 }
 
-static Bit8u * gen_create_branch_long(BranchTypes type) {
+static const Bit8u * gen_create_branch_long(BranchTypes type) {
 	cache_addw(0x800f+(type<<8));
 	cache_addd(0);
 	return (cache.pos-4);
 }
 
-static void gen_fill_branch_long(uint8_t *data, uint8_t *from = cache.pos) {
-	host_writed(data, from - data - sizeof(uint32_t));
+static void gen_fill_branch_long(const Bit8u * data,const Bit8u * from=cache.pos) {
+	cache_addd((Bit32u)(from-data-4),data);
 }
 
-static Bit8u * gen_create_jump(Bit8u * to=0) {
+static const Bit8u * gen_create_jump(const Bit8u * to=0) {
 	/* First free all registers */
 	cache_addb(0xe9);
 	cache_addd(to-(cache.pos+4));
 	return (cache.pos-4);
 }
 
-static void gen_fill_jump(uint8_t *data, uint8_t *to = cache.pos) {
-	host_writed(data, to - data - sizeof(uint32_t));
+static void gen_fill_jump(const Bit8u * data,const Bit8u * to=cache.pos) {
+	gen_fill_branch_long(data,to);
 }
 
 

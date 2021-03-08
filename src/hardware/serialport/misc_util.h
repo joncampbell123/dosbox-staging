@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -55,22 +55,28 @@
 
 #include <SDL_net.h>
 
-Bit32u Netwrapper_GetCapabilities();
+uint32_t Netwrapper_GetCapabilities();
 
 struct _TCPsocketX {
-	int ready;
+	int ready = 0;
 #ifdef NATIVESOCKETS
-	SOCKET channel;
+	SOCKET channel = 0;
 #endif
-	IPaddress remoteAddress;
-	IPaddress localAddress;
-	int sflag;
+	IPaddress remoteAddress = {0, 0};
+	IPaddress localAddress = {0, 0};
+	int sflag = 0;
+};
+
+enum class SocketState {
+	Good, // had data and socket is open
+	Empty, // didn't have data but socket is open
+	Closed // didn't have data and socket is closed
 };
 
 class TCPClientSocket {
 public:
 	TCPClientSocket(TCPsocket source);
-	TCPClientSocket(const char* destination, Bit16u port);
+	TCPClientSocket(const char *destination, uint16_t port);
 #ifdef NATIVESOCKETS
 	TCPClientSocket(int platformsocket);
 #endif
@@ -79,25 +85,21 @@ public:
 
 	~TCPClientSocket();
 
-	// return:
-	// -1: no data
-	// -2: socket closed
-	// >0: data char
-	Bits GetcharNonBlock();
+	SocketState GetcharNonBlock(uint8_t &val);
 
-	bool Putchar(Bit8u data);
-	bool SendArray(Bit8u* data, Bitu bufsize);
-	bool ReceiveArray(Bit8u* data, Bitu* size);
+	bool Putchar(uint8_t val);
+	bool SendArray(uint8_t *data, size_t n);
+	bool ReceiveArray(uint8_t *data, size_t &n);
 
 	bool isopen = false;
 
-	bool GetRemoteAddressString(Bit8u* buffer);
+	bool GetRemoteAddressString(uint8_t *buffer);
 
 	void FlushBuffer();
-	void SetSendBufferSize(Bitu bufsize);
+	void SetSendBufferSize(size_t n);
 
 	// buffered send functions
-	bool SendByteBuffered(Bit8u data);
+	bool SendByteBuffered(uint8_t val);
 
 private:
 
@@ -109,16 +111,16 @@ private:
 	SDLNet_SocketSet listensocketset = nullptr;
 
 	// Items for send buffering
-	Bitu sendbuffersize = 0;
-	Bitu sendbufferindex = 0;
-	Bit8u *sendbuffer = nullptr;
+	size_t sendbuffersize = 0;
+	size_t sendbufferindex = 0;
+	uint8_t *sendbuffer = nullptr;
 };
 
 struct TCPServerSocket {
 	bool isopen = false;
 	TCPsocket mysock = nullptr;
 
-	TCPServerSocket(Bit16u port);
+	TCPServerSocket(uint16_t port);
 	TCPServerSocket(const TCPServerSocket&) = delete; // prevent copying
 	TCPServerSocket& operator=(const TCPServerSocket&) = delete; // prevent assignment
 

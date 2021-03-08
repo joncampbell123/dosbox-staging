@@ -1,5 +1,8 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ *  Copyright (C) 2019-2021  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,9 +19,10 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
+#ifndef DOSBOX_CDROM_H
+#define DOSBOX_CDROM_H
 
-#ifndef __CDROM_INTERFACE__
-#define __CDROM_INTERFACE__
+#include "dosbox.h"
 
 #include <cstring>
 #include <fstream>
@@ -32,7 +36,6 @@
 #include <SDL.h>
 #include <SDL_thread.h>
 
-#include "dosbox.h"
 #include "support.h"
 #include "mem.h"
 #include "mixer.h"
@@ -108,28 +111,27 @@ public:
 	virtual void ChannelControl     (TCtrl ctrl) = 0;
 	virtual bool ReadSectors        (PhysPt buffer, const bool raw, const uint32_t sector, const uint16_t num) = 0;
 	virtual bool LoadUnloadMedia    (bool unload) = 0;
-	virtual void InitNewMedia       (void) {};
+	virtual void InitNewMedia       (void) {}
 };
 
 class CDROM_Interface_Fake : public CDROM_Interface
 {
 public:
 	bool SetDevice          (char *) { return true; }
-	bool GetUPC             (unsigned char& attr, char* upc) { attr = 0; strcpy(upc,"UPC"); return true; };
+	bool GetUPC             (unsigned char& attr, char* upc) { attr = 0; strcpy(upc,"UPC"); return true; }
 	bool GetAudioTracks     (uint8_t& stTrack, uint8_t& end, TMSF& leadOut);
 	bool GetAudioTrackInfo  (uint8_t track, TMSF& start, unsigned char& attr);
 	bool GetAudioSub        (unsigned char& attr, unsigned char& track, unsigned char& index, TMSF& relPos, TMSF& absPos);
 	bool GetAudioStatus     (bool& playing, bool& pause);
 	bool GetMediaTrayStatus (bool& mediaPresent, bool& mediaChanged, bool& trayOpen);
-	bool PlayAudioSector    (const uint32_t start, uint32_t len) { (void)start; (void)len; return true; };
-	bool PauseAudio         (bool /*resume*/) { return true; };
-	bool StopAudio          (void) { return true; };
-	void ChannelControl     (TCtrl ctrl) {
-		(void) ctrl; // unused by part of the API
-		return; 
-	};
-	bool ReadSectors        (PhysPt /*buffer*/, const bool /*raw*/, const uint32_t /*sector*/, const uint16_t /*num*/) { return true; };
-	bool LoadUnloadMedia    (bool /*unload*/) { return true; };
+	bool PlayAudioSector    (const uint32_t start, uint32_t len) { (void)start; (void)len; return true; }
+	bool PauseAudio         (bool /*resume*/) { return true; }
+	bool StopAudio          (void) { return true; }
+
+	void ChannelControl(MAYBE_UNUSED TCtrl ctrl) {}
+
+	bool ReadSectors        (PhysPt /*buffer*/, const bool /*raw*/, const uint32_t /*sector*/, const uint16_t /*num*/) { return true; }
+	bool LoadUnloadMedia    (bool /*unload*/) { return true; }
 };
 
 class CDROM_Interface_Image : public CDROM_Interface
@@ -143,6 +145,7 @@ private:
 		uint32_t adjustOverRead(const uint32_t offset,
 		                        const uint32_t requested_bytes);
 		int length_redbook_bytes = -1;
+		uint32_t audio_pos = std::numeric_limits<uint32_t>::max(); // last position when playing audio
 
 	public:
 		virtual          ~TrackFile() = default;
@@ -155,6 +158,7 @@ private:
 		virtual Bit32u   getRate() = 0;
 		virtual Bit8u    getChannels() = 0;
 		virtual int      getLength() = 0;
+		virtual void setAudioPosition(uint32_t pos) = 0;
 		const Bit16u chunkSize = 0;
 	};
 
@@ -176,6 +180,8 @@ private:
 		Bit32u          getRate() { return 44100; }
 		Bit8u           getChannels() { return 2; }
 		int             getLength();
+		void setAudioPosition(uint32_t pos) { audio_pos = pos; }
+
 	private:
 		std::ifstream   *file;
 	};
@@ -198,10 +204,11 @@ private:
 		Bit32u          getRate();
 		Bit8u           getChannels();
 		int             getLength();
+		// This is a no-op because we track the audio position in all
+		// areas of this class.
+		void setAudioPosition(MAYBE_UNUSED uint32_t pos) {}
 	private:
-		Sound_Sample    *sample = nullptr;
-		// ensure the first seek isn't cached by starting with an impossibly-large position
-		uint32_t        track_pos = (std::numeric_limits<uint32_t>::max)();
+		Sound_Sample *sample = nullptr;
 	};
 
 public:
@@ -216,9 +223,11 @@ public:
 		uint8_t                    attr       = 0;
 		bool                       mode2      = false;
 	};
-	CDROM_Interface_Image           (Bit8u _subUnit);
+
+	CDROM_Interface_Image(uint8_t sub_unit);
+
 	virtual ~CDROM_Interface_Image  (void);
-	void	InitNewMedia            (void) {};
+	void	InitNewMedia            (void) {}
 	bool	SetDevice               (char *path);
 	bool	GetUPC                  (unsigned char& attr, char* upc);
 	bool	GetAudioTracks          (uint8_t& stTrack, uint8_t& end, TMSF& leadOut);
@@ -226,7 +235,7 @@ public:
 	bool	GetAudioSub             (unsigned char& attr, unsigned char& track, unsigned char& index, TMSF& relPos, TMSF& absPos);
 	bool	GetAudioStatus          (bool& playing, bool& pause);
 	bool	GetMediaTrayStatus      (bool& mediaPresent, bool& mediaChanged, bool& trayOpen);
-	bool	PlayAudioSector         (const uint32_t start, uint32_t len);
+	bool PlayAudioSector(uint32_t start, uint32_t len);
 	bool	PauseAudio              (bool resume);
 	bool	StopAudio               (void);
 	void	ChannelControl          (TCtrl ctrl);
@@ -278,7 +287,6 @@ private:
 	std::vector<uint8_t> readBuffer;
 	std::string          mcn;
 	static int           refCount;
-	uint8_t              subUnit;
 };
 
-#endif /* __CDROM_INTERFACE__ */
+#endif

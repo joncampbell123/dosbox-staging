@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@
 
 typedef void (*TIMER_TickHandler)(void);
 
-/* Register a function that gets called everytime if 1 or more ticks pass */
+/* Register a function that gets called every time if 1 or more ticks pass */
 void TIMER_AddTickHandler(TIMER_TickHandler handler);
 void TIMER_DelTickHandler(TIMER_TickHandler handler);
 

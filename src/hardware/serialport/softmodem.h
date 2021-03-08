@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2020  The DOSBox Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,15 +16,16 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-
 #ifndef DOSBOX_SERIALMODEM_H
 #define DOSBOX_SERIALMODEM_H
+
+#include "dosbox.h"
+
+#if C_MODEM
 
 #include <vector>
 #include <memory>
 
-#include "dosbox.h"
-#if C_MODEM
 #include "serialport.h"
 #include "misc_util.h"
 
@@ -58,30 +59,24 @@ enum ResTypes {
 #define TEL_SERVER 1
 
 bool MODEM_ReadPhonebook(const std::string &filename);
+void MODEM_ClearPhonebook();
 
 class CFifo {
 public:
-	CFifo(Bitu _size)
-		: data(_size),
-		  size(_size),
-		  pos(0),
-		  used(0)
-	{}
+	CFifo(const size_t n) : data(n), size(n) {}
 
-	INLINE Bitu left(void) const {
-		return size - used;
-	}
-	INLINE Bitu inuse(void) const {
-		return used;
-	}
-	void clear(void) {
+	uint32_t left() const { return size - used; }
+	uint32_t inuse() const { return used; }
+	void clear()
+	{
 		used = 0;
 		pos = 0;
 	}
 
-	void addb(Bit8u _val) {
-		if(used >= size) {
-			static Bits lcount = 0;
+	void addb(uint8_t val)
+	{
+		if (used >= size) {
+			static uint16_t lcount = 0;
 			if (lcount < 1000) {
 				lcount++;
 				LOG_MSG("MODEM: FIFO Overflow! (addb)");
@@ -89,46 +84,48 @@ public:
 			return;
 		}
 		//assert(used<size);
-		Bitu where = pos + used;
+		size_t where = pos + used;
 		if (where >= size)
 			where -= size;
-		data[where]=_val;
-		//LOG_MSG("+%x",_val);
+		data[where] = val;
+		//LOG_MSG("+%x", val);
 		used++;
 	}
 
-	void adds(Bit8u * _str,Bitu _len) {
-		if ( (used+_len) > size) {
-			static Bits lcount=0;
+	void adds(uint8_t *str, size_t len)
+	{
+		if ((used + len) > size) {
+			static uint16_t lcount = 0;
 			if (lcount < 1000) {
 				lcount++;
-				LOG_MSG("MODEM: FIFO Overflow! (adds len %" PRIuPTR ")",
-				        _len);
+				LOG_MSG("MODEM: FIFO Overflow! (adds len %u)",
+				        static_cast<unsigned>(len));
 			}
 			return;
 		}
 
-		//assert((used+_len)<=size);
-		Bitu where = pos + used;
-		used += _len;
-		while (_len--) {
+		//assert((used + len) <= size);
+		size_t where = pos + used;
+		used += len;
+		while (len--) {
 			if (where >= size)
 				where -= size;
-			//LOG_MSG("+'%x'",*_str);
-			data[where++] = *_str++;
+			//LOG_MSG("+'%x'", *str);
+			data[where++] = *str++;
 		}
 	}
 
-	Bit8u getb(void) {
+	uint8_t getb()
+	{
 		if (!used) {
-			static Bits lcount = 0;
+			static uint16_t lcount = 0;
 			if (lcount < 1000) {
 				lcount++;
 				LOG_MSG("MODEM: FIFO UNDERFLOW! (getb)");
 			}
 			return data[pos];
 		}
-		Bitu where = pos;
+		const size_t where = pos;
 		if (++pos >= size)
 			pos -= size;
 		used--;
@@ -136,30 +133,32 @@ public:
 		return data[where];
 	}
 
-	void gets(Bit8u * _str,Bitu _len) {
+	void gets(uint8_t *str, size_t len)
+	{
 		if (!used) {
-			static Bits lcount = 0;
+			static uint16_t lcount = 0;
 			if (lcount < 1000) {
 				lcount++;
-				LOG_MSG("MODEM: FIFO UNDERFLOW! (gets len %" PRIuPTR ")",
-				        _len);
+				LOG_MSG("MODEM: FIFO UNDERFLOW! (gets len %u)",
+				        static_cast<unsigned>(len));
 			}
 			return;
 		}
-			//assert(used>=_len);
-		used -= _len;
-		while (_len--) {
-			//LOG_MSG("-%x",data[pos]);
-			*_str++ = data[pos];
+		// assert(used >= len);
+		used -= len;
+		while (len--) {
+			//LOG_MSG("-%x", data[pos]);
+			*str++ = data[pos];
 			if (++pos >= size)
 				pos -= size;
 		}
 	}
+
 private:
-	std::vector<Bit8u> data;
-	Bitu size;
-	Bitu pos;
-	Bitu used;
+	std::vector<uint8_t> data;
+	size_t size = 0;
+	size_t pos = 0;
+	size_t used = 0;
 };
 #define MREG_AUTOANSWER_COUNT 0
 #define MREG_RING_COUNT 1
@@ -173,35 +172,35 @@ private:
 
 class CSerialModem : public CSerial {
 public:
-	CSerialModem(Bitu id, CommandLine* cmd);
+	CSerialModem(const uint8_t port_idx, CommandLine *cmd);
 	~CSerialModem();
 	void Reset();
 
 	void SendLine(const char *line);
 	void SendRes(const ResTypes response);
-	void SendNumber(Bitu val);
+	void SendNumber(uint32_t val);
 
 	void EnterIdleState();
 	void EnterConnectedState();
 	bool Dial(const char *host);
-	void AcceptIncomingCall(void);
-	Bitu ScanNumber(char * & scan) const;
+	void AcceptIncomingCall();
+	uint32_t ScanNumber(char *&scan) const;
 	char GetChar(char * & scan) const;
 
 	void DoCommand();
 
-	// void MC_Changed(Bitu new_mc);
+	// void MC_Changed(uint32_t new_mc);
 
-	void TelnetEmulation(Bit8u * data, Bitu size);
+	void TelnetEmulation(uint8_t *data, uint32_t size);
 
 	//TODO
-	void Timer2(void);
-	void handleUpperEvent(Bit16u type);
+	void Timer2();
+	void handleUpperEvent(uint16_t type);
 
 	void RXBufferEmpty();
 
-	void transmitByte(Bit8u val, bool first);
-	void updatePortConfig(Bit16u divider, Bit8u lcr);
+	void transmitByte(uint8_t val, bool first);
+	void updatePortConfig(uint16_t divider, uint8_t lcr);
 	void updateMSR();
 
 	void setBreak(bool);
@@ -214,48 +213,58 @@ public:
 	std::unique_ptr<CFifo> tqueue;
 
 protected:
-	char cmdbuf[255];
-	bool commandmode;       // true: interpret input as commands
-	bool echo;              // local echo on or off
-	bool oldDTRstate;
-	bool ringing;
-	bool numericresponse;   // true: send control response as number.
-	                        // false: send text (i.e. NO DIALTONE)
-	bool telnetmode;        // true: process IAC commands.
-	bool connected;
-	Bitu doresponse;
-	Bit8u waiting_tx_character;
-	Bitu cmdpause;
-	Bits ringtimer;
-	Bits ringcount;
-	Bitu plusinc;
-	Bitu cmdpos;
-	Bitu flowcontrol;
-	Bitu dtrmode;
-	Bits dtrofftimer;
-	Bit8u tmpbuf[MODEM_BUFFER_QUEUE_SIZE];
-	Bitu listenport;
-	Bit8u reg[SREGS];
-	std::unique_ptr<TCPServerSocket> serversocket;
-	std::unique_ptr<TCPClientSocket> clientsocket;
-	std::unique_ptr<TCPClientSocket> waitingclientsocket;
+	// The AT command line can consist of a 99-character command sequence
+	// including the AT prefix followed by "D<phone/hostname>", where the
+	// hostname can reach a length of up to 253 characters.
+	// AT<97-chars>D<253-chars> is a string of up to 353 characters plus a
+	// null.
+	char cmdbuf[354] = {0};
+	bool commandmode = false; // true: interpret input as commands
+	bool echo = false;        // local echo on or off
+	bool oldDTRstate = false;
+	bool ringing = false;
+	bool numericresponse = false; // true: send control response as number.
+	                              // false: send text (i.e. NO DIALTONE)
+	bool telnet_mode = false; // Default to direct null modem connection;
+	                         // Telnet mode interprets IAC
+	bool connected = false;
+	uint32_t doresponse = 0;
+	uint8_t waiting_tx_character = 0;
+	uint32_t cmdpause = 0;
+	int32_t ringtimer = 0;
+	int32_t ringcount = 0;
+	uint32_t plusinc = 0;
+	uint32_t cmdpos = 0;
+	uint32_t flowcontrol = 0;
+	uint32_t dtrmode = 0;
+	int32_t dtrofftimer = 0;
+	uint8_t tmpbuf[MODEM_BUFFER_QUEUE_SIZE] = {0};
+	uint16_t listenport = 23; // 23 is the default telnet TCP/IP port
+	uint8_t reg[SREGS] = {0};
+	std::unique_ptr<TCPServerSocket> serversocket = nullptr;
+	std::unique_ptr<TCPClientSocket> clientsocket = nullptr;
+	std::unique_ptr<TCPClientSocket> waitingclientsocket = nullptr;
 
 	struct {
-		bool binary[2];
-		bool echo[2];
-		bool supressGA[2];
-		bool timingMark[2];
-		bool inIAC;
-		bool recCommand;
-		Bit8u command;
+		bool binary[2] = {false};
+		bool echo[2] = {false};
+		bool supressGA[2] = {false};
+		bool timingMark[2] = {false};
+		bool inIAC = false;
+		bool recCommand = false;
+		uint8_t command = 0;
 	} telClient;
 
 	struct {
-		bool active;
-		double f1, f2;
-		Bitu len,pos;
-		char str[256];
+		bool active = false;
+		double f1 = 0.0f;
+		double f2 = 0.0f;
+		uint32_t len = 0;
+		uint32_t pos = 0;
+		char str[256] = {0};
 	} dial;
 };
-#endif
+
+#endif // C_MODEM
+
 #endif

@@ -2,6 +2,14 @@
     "version": 1,
     "warnings": [
         {
+            "CodeCurrent": 0,
+            "CodeNext": 0,
+            "CodePrev": 0,
+            "ErrorCode": "Renew",
+            "FileName": " ",
+            "Message": "Your license will expire in _ days. Click 'Renew' to learn more or contact us at support@viva_.com."
+        },
+        {
             "CodeCurrent": 99146737,
             "CodeNext": 3299936121,
             "CodePrev": 2974951853,
@@ -128,6 +136,22 @@
             "ErrorCode": "V547",
             "FileName": "dr_mp3.h",
             "Message": "Expression is always false."
+        },
+        {
+            "CodeCurrent": 1596023591,
+            "CodeNext": 1249513261,
+            "CodePrev": 4081771348,
+            "ErrorCode": "V547",
+            "FileName": "dr_wav.h",
+            "Message": "Expression 'bytesToRead > (_UL)' is always false."
+        },
+        {
+            "CodeCurrent": 1849716353,
+            "CodeNext": 11359373,
+            "CodePrev": 2663124891,
+            "ErrorCode": "V1051",
+            "FileName": "dr_wav.h",
+            "Message": "Consider checking for misprints. It's possible that the 'sampleCountFromFactChunk' should be used inside 'drwav__seek_forward' function."
         },
         {
             "CodeCurrent": 3210175261,
