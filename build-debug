@@ -8,6 +8,6 @@
 # now compile ourself
 echo Compiling DOSBox-X
 chmod +x configure
-./configure --enable-core-inline --enable-debug=heavy --enable-avcodec --prefix=/usr "$@" || exit 1
+./configure --enable-core-inline --prefix=/usr "$@" || exit 1
 make -j3 || exit 1
 
