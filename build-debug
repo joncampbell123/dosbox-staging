@@ -3,4 +3,5 @@
 rm -Rf build || exit 1
 mkdir build || exit 1
 meson -Duse_fluidsynth=false -Duse_sdl2_net=false build || exit 1
+(cd build && ninja) || exit 1
 
